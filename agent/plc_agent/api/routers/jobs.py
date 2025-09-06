@@ -8,9 +8,13 @@ from ..store import Store
 
 from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String, UniqueConstraint, inspect, insert, select, update
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from opcua import Client, ua
 
 import threading, time, uuid
+
+from datetime import datetime
 
 from typing import Optional, Callable, Union
 
@@ -73,32 +77,68 @@ class JobThread(threading.Thread):
 
 job_threads: Dict[int, JobThread] = {}
 
-def opcua_job(job_id: int,**kwargs):
-    client = Client("opc.tcp://localhost:4840/freeopcua/server/")
-    table = kwargs.get("table", "default_table")
+def opcua_job(job_id: int, **kwargs):
+    table_name = kwargs.get("table", "default_table")
     engine = create_engine(DATABASE_URL)
     metadata = MetaData()
+    metadata.reflect(bind=engine)
+
+    client = Client("opc.tcp://localhost:4840/freeopcua/server/")
+    
     try:
         client.connect()
-        #with engine.connect() as conn:
-        for i in range(1, 11):
-            node_id_str = f"ns=2;s=Device{i}.Temperature"
-            node = client.get_node(node_id_str)
+
+        with engine.begin() as conn:   
+            inspector = inspect(engine)
+
+            if not inspector.has_table(table_name):
+                raise HTTPException(status_code=400, detail=f"Table '{table_name}' does not exist in the database.")
+            
+            node_mappings_table = metadata.tables.get("node_mappings")
+            if node_mappings_table is None:
+                raise HTTPException(status_code=500, detail="Mapping table 'node_mappings' not found in metadata.")
+            
+            stmt = select(
+                node_mappings_table.c.node_id,
+                node_mappings_table.c.column_name
+            ).where(node_mappings_table.c.table_name == table_name)
+            
+            result = conn.execute(stmt).mappings().all()
+            if not result:
+                print(f"[Job {job_id}] No node mappings found for table '{table_name}'")
+                return
+
+            node_ids = [row['node_id'] for row in result]
+            column_names = [row['column_name'] for row in result]
+            print(f"[Job {job_id}] Reading nodes: {node_ids}")
             try:
-                value = node.get_value()
+                nodes = [client.get_node(node_id) for node_id in node_ids]
+                values = client.get_values(nodes)
             except Exception as e:
-                print(f"[Job {job_id}] Error reading {node_id_str}: {e}")
-                value = None
-            print(f"[Job {job_id}] {node_id_str} = {value}")
-                # ins = insert(table).values(
-                #     job_id=job_id,
-                #     node_id=node_id_str,
-                #     value=float(value) if value is not None else None,
-                #     timestamp=datetime.utcnow(),
-                # )
-                #conn.execute(ins)
-            #conn.commit()
-        print(f"[Job {job_id}] Readings logged.")
+                raise RuntimeError(f"[Job {job_id}] OPC UA read failed: {e}")
+
+            target_table = metadata.tables.get(table_name)
+            if target_table is None:
+                raise HTTPException(status_code=500, detail=f"Target table '{table_name}' not found in metadata.")
+
+            row_data = {
+                col: float(val) if val is not None else None
+                for col, val in zip(column_names, values)
+            }
+
+            
+            if 'timestamp' in target_table.c:
+                row_data['timestamp'] = datetime.utcnow()
+
+            conn.execute(insert(target_table).values(**row_data))
+            print(f"[Job {job_id}] Readings logged successfully.")
+
+    except SQLAlchemyError as db_err:
+        print(f"[Job {job_id}] Database error: {db_err}")
+    except HTTPException as http_err:
+        raise http_err  
+    except Exception as err:
+        print(f"[Job {job_id}] Unexpected error: {err}")
     finally:
         client.disconnect()
 
