@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { getHealth } from '../../lib/api/networking.js'
+import { testModbus } from '../../lib/api/networking.js'
 
 export default function ModbusForm() {
   const [host, setHost] = useState('127.0.0.1')
@@ -10,8 +10,8 @@ export default function ModbusForm() {
   const probe = async () => {
     setStatus('probing...')
     try {
-      const h = await getHealth()
-      setStatus('agent: ' + h.status)
+      const res = await testModbus({ host, port, unitId })
+      setStatus(res.ok ? `OK (${res.latencyMs??'?'} ms)` : `fail: ${res.message||'error'}`)
     } catch (e) {
       setStatus('error')
     }
@@ -30,4 +30,3 @@ export default function ModbusForm() {
     </div>
   )
 }
-
