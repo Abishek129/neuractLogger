@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <ComponentGroup Id="ExtrasGroup">
+      <Component Id="CreateDataDirs" Guid="{D22A0A6B-6A8F-4D2D-A2B1-9BF7D9B7F001}" Directory="PD_LOGS">
+        <CreateFolder />
+        <RegistryValue Root="HKLM" Key="Software\PLCLogger" Name="PD_LOGS" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <Component Id="UiStartMenuShortcut" Guid="{D22A0A6B-6A8F-4D2D-A2B1-9BF7D9B7F002}" Directory="AppProgramMenuDir">
+        <Shortcut Id="StartMenuShortcut" Name="PLC Logger" Target="[UIDIR]plc-logger-tray.exe" WorkingDirectory="UIDIR" />
+        <RemoveFile Id="RmStartMenuShortcut" On="uninstall" Name="PLC Logger.lnk" />
+        <RegistryValue Root="HKLM" Key="Software\PLCLogger" Name="SM_Shortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <Component Id="UiDesktopShortcut" Guid="{D22A0A6B-6A8F-4D2D-A2B1-9BF7D9B7F003}" Directory="CommonDesktopFolder">
+        <Shortcut Id="DesktopShortcut" Name="PLC Logger" Target="[UIDIR]plc-logger-tray.exe" WorkingDirectory="UIDIR" />
+        <RemoveFile Id="RmDesktopShortcut" On="uninstall" Name="PLC Logger.lnk" />
+        <RegistryValue Root="HKLM" Key="Software\PLCLogger" Name="Desk_Shortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>
+
+

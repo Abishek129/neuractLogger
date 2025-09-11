@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="PLC Logger" Manufacturer="PLCLogger" Version="0.1.0" Language="1033" UpgradeCode="{E4D7E1C0-DEAD-BEEF-C0DE-1234567890AB}">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+    <MediaTemplate />
+    <Feature Id="MainFeature" Title="PLC Logger" Level="1">
+      <ComponentGroupRef Id="AgentGroup" />
+      <ComponentGroupRef Id="UiGroup" />
+      <ComponentGroupRef Id="ExtrasGroup" />
+    </Feature>
+  </Product>
+  <Fragment>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="PLCLogger">
+          <Directory Id="AGENTDIR" Name="agent" />
+          <Directory Id="UIDIR" Name="ui" />
+        </Directory>
+      </Directory>
+      <Directory Id="CommonCommonProgramMenuFolder">
+        <Directory Id="AppProgramMenuDir" Name="PLC Logger" />
+      </Directory>
+      <Directory Id="DesktopFolder" />
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="PD_ROOT" Name="PLCLogger">
+          <Directory Id="PD_AGENT" Name="agent">
+            <Directory Id="PD_LOGS" Name="logs" />
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="CommonDesktopFolder" />
+    </Directory>
+  </Fragment>
+</Wix>

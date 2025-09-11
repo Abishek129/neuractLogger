@@ -1,8 +1,8 @@
 import { request } from './client.js'
 
-export const listMappings = (device) => request(`/mappings/${encodeURIComponent(device)}`)
-export const upsertMapping = (device, payload) => request(`/mappings/${encodeURIComponent(device)}`, { method: 'POST', body: payload })
-export const bulkApply = (device, payload) => request(`/mappings/${encodeURIComponent(device)}/bulk_apply`, { method: 'POST', body: payload })
-export const importMappings = (device, payload) => request(`/mappings/${encodeURIComponent(device)}/import`, { method: 'POST', body: payload })
-export const validateMappings = (device, payload) => request(`/mappings/${encodeURIComponent(device)}/validate`, { method: 'POST', body: payload })
-
+export const getMapping = (tableId) => request(`/mappings/${encodeURIComponent(tableId)}`)
+export const upsertMapping = (tableId, payload) => request(`/mappings/${encodeURIComponent(tableId)}`, { method: 'POST', body: payload })
+export const bulkApply = (tableId, payload) => request(`/mappings/${encodeURIComponent(tableId)}/bulk_apply`, { method: 'POST', body: payload })
+export const importMappings = (tableId, payload) => request(`/mappings/${encodeURIComponent(tableId)}/import`, { method: 'POST', body: payload })
+export const validateMappings = (tableId, payload) => request(`/mappings/${encodeURIComponent(tableId)}/validate`, { method: 'POST', body: payload })
+export const deleteMappingRow = (tableId, fieldKey) => request(`/mappings/${encodeURIComponent(tableId)}/${encodeURIComponent(fieldKey)}`, { method: 'DELETE' })

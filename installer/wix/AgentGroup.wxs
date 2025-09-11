@@ -1,0 +1,419 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="AGENTDIR">
+      <Directory Id="dir29E7D615817D94377DE2CD43EEA05AB8" Name="_internal" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <ComponentGroup Id="AgentGroup">
+      <Component Id="cmpE976C5D70F091A96060C8A028F699EF8" Directory="AGENTDIR" Guid="*">
+        <File Id="filF99C95468C41CE558CAA305532E9B002" KeyPath="yes" Source="$(var.AgentDir)\agent_service.exe" />
+      </Component>
+      <Component Id="cmp06A622F30C63048568C9981A0399F981" Directory="AGENTDIR" Guid="*">
+        <File Id="fil1FBE892D5141904DA2F3615FFC4C28D2" KeyPath="yes" Source="$(var.AgentDir)\plclogger-agent.exe" />
+      </Component>
+      <Component Id="cmp0420856B570A3FD2DC269893F8EA3C9C" Directory="AGENTDIR" Guid="*">
+        <File Id="filB66361FFCFF1ED49AA6B3AD0859E4E5B" KeyPath="yes" Source="$(var.AgentDir)\PLCLoggerSvc.exe" />
+        <ServiceInstall Id="PLCLoggerSvcInstall" Name="PLCLoggerSvc" DisplayName="PLC Logger Agent" Start="auto" Type="ownProcess" ErrorControl="normal" />
+        <ServiceControl Id="PLCLoggerSvcControl" Name="PLCLoggerSvc" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+      <Component Id="cmp72B6C7E77315B550EA6C0AA235345DB7" Directory="AGENTDIR" Guid="*">
+        <File Id="fil26FF4938361FEF7F191D8E8754861EEB" KeyPath="yes" Source="$(var.AgentDir)\PLCLoggerSvc.xml" />
+      </Component>
+      <Component Id="cmp5C8DF20D4CD892AC1E1272DA32B4E650" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil3EFEEB01DBFFEF8F0431223587C4268C" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-console-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp2DA8C7867F5BFCEF053557C1A584F97E" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filD2371ECA1363CD53A45AA5407D208068" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-datetime-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmpB70CD8705CD1453FB9CA3D390801CDC0" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil44AB1AC5E7BCA3CD033E93B9FD52AE4D" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-debug-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp1D14147FE2AF91AD78CEFAF70989C337" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil4B871AC45CCD7A305E9F1C427AFCC4C7" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-errorhandling-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp701BD4AC4DA08ABD5A7830F83C7606CA" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil7DE487651639A398FC3A6BB8E1B04013" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-fibers-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmpB2C93947AF9E5725AE03F266B3A6698E" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil7E8362093C5029AE5D72B68808DBBF0D" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-file-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp211A9D2665ACF471406232D883F98538" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filC57C85238C166AD99C8678D2CD0067C3" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-file-l1-2-0.dll" />
+      </Component>
+      <Component Id="cmpB5B397ABC6B349B007F5603C1D4318CC" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil7D42FA16A349B28745A14D5B802C360D" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-file-l2-1-0.dll" />
+      </Component>
+      <Component Id="cmp1511CAB64D83EE480C2D00A9CF17BD21" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filF9B885E0B39E93B13F0BE81CA83445C0" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-handle-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp0A24CCF1EFC72C54D2FA8DFF545D5456" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil579D73FA18DBDA6BCA19057AD04D6E69" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-heap-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp6A6F433EF1AD284AB2B4E66EA782C0DF" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil16F9C0081466429ED2B4238AED88D29A" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-interlocked-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmpF188CF385F4A5292D5779B50B1273D0F" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filA1A662D3155B833E46C8B5DEE332BD6E" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-libraryloader-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmpD7B6444E8C39E6D8FF02737C9E930191" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filCB68F9AF62ECE20B63D9885E921E7E06" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-localization-l1-2-0.dll" />
+      </Component>
+      <Component Id="cmp1AFD34CA203DCCBB9C98586E19AF2706" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filB5AAF22380023227D66C1650BAB2C1D4" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-memory-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmpB55E202C0DEDDAED82D4ABF4D7679EB8" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil1809720CE191769B6B39277B8E4537CD" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-namedpipe-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmpBDCB8BC0CF9D4C0720C3DFE8F6218D32" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filB4BB7471FD3DE2E5F28278394AD70705" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-processenvironment-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp5C84EDFBBCDCF08A128CCDAE03201FD5" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filA7DA1C7029F1F52E95EBF5DD3AE51DAB" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-processthreads-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp3D2FA05FA64B8CFAFA35B60C797EDC0A" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filD2C3490909E80EFDDA515BF940AB979D" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-processthreads-l1-1-1.dll" />
+      </Component>
+      <Component Id="cmpA6E7AE8580A9D1E49159436894939E5B" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil02988FC073471DC04C12B4482A5CF82E" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-profile-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmpB68F383ACD342F1FD2785E8CF6FCCA60" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil7A9A0040047040E79FB8D1251BDD93CC" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-rtlsupport-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmpDCD9CB98A27F4921472F460A0A820AA1" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil15033B578CB1FC9D401A4B6AFC5F71BE" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-string-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp8A6EDB03C4FEC5000FB48DA81A654A37" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filB894540C5C6462BF0E6BB81A6FD0776B" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-synch-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmpB197DF0424DFC3FC055C9EDA6A925FF2" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil1155AF711AE40A07567C9E3459540938" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-synch-l1-2-0.dll" />
+      </Component>
+      <Component Id="cmpB18834D033B39A02E2036208D39F5932" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil9C3E61EC8D3E35FA21FEC3FA6D7120F4" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-sysinfo-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmpA969D2B740EF68505E99CDDAC2ADB7D8" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil73A15FEC3B2961838C5A124FBD5286A8" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-timezone-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp305E5E14F69C29323C509F0FE524A80C" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil793226B33F331551461B054C8AC26AF3" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-core-util-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp72919DD6BCAAF867A3A1E4A70976AF9E" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil8280934AFA877BCDDEE90EC4E1224BB0" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-crt-conio-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp26D073FDD8B50C161205565360EEA676" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filBBA342195BC451DE19BEEB36BBC5B729" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-crt-convert-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp07BD417F179938CBF213770FCF003CFF" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil125E6DD7A3AA5076938D6E6F79D390C3" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-crt-environment-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmpA4C249FD400C9DBA7F3A43ED88878D9E" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil97D3FF7C3B6C14B77CB316588BC175A3" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-crt-filesystem-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmpB217EB113725F4C9CEB1E5A5A4C95FA7" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil7B0B9C502AC242413337B5CAD9D9E3F3" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-crt-heap-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp94835D7138AEDD5318063537EA2A8FB9" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil4BAE53359C92F10C754FC5584B932EF0" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-crt-locale-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp86A70410FEEA9C0593640DBBD012A938" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil72B52EDD5CA09D2B60986C78059EF02F" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-crt-math-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmpAE6213354722B72050E43E68A42120E0" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil86DDD48791ED6DC457FC9FE3A13D6F22" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-crt-process-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmpE2884ABF491D663393CC2676643103CC" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filF8559D03BBCA3C2BDAAE11AE89861694" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-crt-runtime-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp71FA443D019851E283949F01A879D71E" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil204A9B0286C0AB12C50F071087030161" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-crt-stdio-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp70079DD1E35EC46A97A8747749C40A62" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil7E7EA810BB2F5D331A0C6920FB4FE282" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-crt-string-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp5B7005B06F37F39E495F11941F776301" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filD235B4EB128D8CE6D6986EDC5716C49A" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-crt-time-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmpB024C1D9180908660125FADAFB117DDD" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filE8933191E9FE84565F836174632775BC" KeyPath="yes" Source="$(var.AgentDir)\_internal\api-ms-win-crt-utility-l1-1-0.dll" />
+      </Component>
+      <Component Id="cmp5DBD7124BE9FCDEB7ADE84A67D05C3D8" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filB1CF4C1CA2949C809A177028B7BF58F9" KeyPath="yes" Source="$(var.AgentDir)\_internal\base_library.zip" />
+      </Component>
+      <Component Id="cmp6116254A353A64141891C70F0457845B" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filC1DDE8875E89253B74FE5D382FD199DB" KeyPath="yes" Source="$(var.AgentDir)\_internal\libcrypto-3.dll" />
+      </Component>
+      <Component Id="cmp15766745ECB1CEAA07B49B82A9925B61" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil0381675637FDB32F438B6E3F9F873419" KeyPath="yes" Source="$(var.AgentDir)\_internal\libffi-8.dll" />
+      </Component>
+      <Component Id="cmpA072560DADD031A66B89C649999B2789" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filB87C9441E0485263B4F75EB275B8792B" KeyPath="yes" Source="$(var.AgentDir)\_internal\libssl-3.dll" />
+      </Component>
+      <Component Id="cmpEDBD3CDA82F8155F11E09A760C04A7B1" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil58F011C870D64744FDB35A3073BD8B3E" KeyPath="yes" Source="$(var.AgentDir)\_internal\pyexpat.pyd" />
+      </Component>
+      <Component Id="cmp6F040F0858AD5AA4F338AE5D5C17CCF2" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil882605EFF166D1E34F491975991848F5" KeyPath="yes" Source="$(var.AgentDir)\_internal\python313.dll" />
+      </Component>
+      <Component Id="cmp2BE7FBCB62B8F78CB91D81843BA9E3E3" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil17EF11CFD9644F15A9CE12DE98DF6A18" KeyPath="yes" Source="$(var.AgentDir)\_internal\pywintypes313.dll" />
+      </Component>
+      <Component Id="cmp218DC9FBFF3716D1E027FE72FDF6241A" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filDE99C357265B1B7241625E0F8820BDF1" KeyPath="yes" Source="$(var.AgentDir)\_internal\select.pyd" />
+      </Component>
+      <Component Id="cmp83140BC179EA3365EA3ACCE54205E294" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filB6373FB46818F4876DCE42EFECE9628D" KeyPath="yes" Source="$(var.AgentDir)\_internal\sqlite3.dll" />
+      </Component>
+      <Component Id="cmp0CE923EF41EB03B7DE6BA9FFB32C7BAF" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil9A760D04EBEA5B61072D2ECFFAF90A7F" KeyPath="yes" Source="$(var.AgentDir)\_internal\ucrtbase.dll" />
+      </Component>
+      <Component Id="cmp678CFAF6155E1F62D4912E1FF5BC5F24" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil99BE4E4F60C54237EEF6AAE41B3C2563" KeyPath="yes" Source="$(var.AgentDir)\_internal\unicodedata.pyd" />
+      </Component>
+      <Component Id="cmp1FE0D7C55AF4CF5C643099BED7BCC4FB" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filE043BD1C1CBC993876B48EE056433D4D" KeyPath="yes" Source="$(var.AgentDir)\_internal\VCRUNTIME140.dll" />
+      </Component>
+      <Component Id="cmp858EE8348C5A6F5BACC4CFC6804457EF" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil9E64301E54297E782062381744467E19" KeyPath="yes" Source="$(var.AgentDir)\_internal\VCRUNTIME140_1.dll" />
+      </Component>
+      <Component Id="cmpE800B27E572B34DDEF6F6CF53AFBBEC8" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filD2443C973C7466FD7C7565ECADF87FE1" KeyPath="yes" Source="$(var.AgentDir)\_internal\_asyncio.pyd" />
+      </Component>
+      <Component Id="cmp971D7234036253E788BC418D327E4EFF" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil008650C8BC238DA8AA03B82637462CAB" KeyPath="yes" Source="$(var.AgentDir)\_internal\_bz2.pyd" />
+      </Component>
+      <Component Id="cmp5E51975A827C9066295B4DB8C15BF2C5" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filF5DE6401C56663B631A430BF69167C34" KeyPath="yes" Source="$(var.AgentDir)\_internal\_ctypes.pyd" />
+      </Component>
+      <Component Id="cmp9A045DC224753A3AF28B8219340278C0" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filE30525F85710931DF7F151FA55E261A7" KeyPath="yes" Source="$(var.AgentDir)\_internal\_decimal.pyd" />
+      </Component>
+      <Component Id="cmp2458713910F47B972CA9185066C92922" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filEE95152708AF8EC5B84E692242726A6C" KeyPath="yes" Source="$(var.AgentDir)\_internal\_hashlib.pyd" />
+      </Component>
+      <Component Id="cmp7A8E9B65ED4C1F0373C7F81E989B046E" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filFC6C6902AF3C8102692E063F6961EA80" KeyPath="yes" Source="$(var.AgentDir)\_internal\_lzma.pyd" />
+      </Component>
+      <Component Id="cmp4036D042EF8CDF36398F7428A6C03D63" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil13C72CB19C419EA64D90798B9BDAC46A" KeyPath="yes" Source="$(var.AgentDir)\_internal\_multiprocessing.pyd" />
+      </Component>
+      <Component Id="cmp33B63185B7D4406D1E8FEC2B7BF0AF35" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil9BF73BE0C85196CE379D3F090EBBF4FB" KeyPath="yes" Source="$(var.AgentDir)\_internal\_overlapped.pyd" />
+      </Component>
+      <Component Id="cmp565751B3FC082359DC7280CC2AFF2966" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filB68A6ED493A732029852A1794E8E21DC" KeyPath="yes" Source="$(var.AgentDir)\_internal\_queue.pyd" />
+      </Component>
+      <Component Id="cmp972604F7B412687D2220E08465AB1658" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil3B2F7229306D1130DCB7E90CAE8AAE93" KeyPath="yes" Source="$(var.AgentDir)\_internal\_socket.pyd" />
+      </Component>
+      <Component Id="cmp4277375CAF51B568EA53CD5A117D829E" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil3CE9A6CE6A13FC2B0EA7F9999C2DC646" KeyPath="yes" Source="$(var.AgentDir)\_internal\_sqlite3.pyd" />
+      </Component>
+      <Component Id="cmpCCB4B275BDC26DC4E9E665FC3A3780EB" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil7277645DF0D6687C0ECD9C425ECD9FC8" KeyPath="yes" Source="$(var.AgentDir)\_internal\_ssl.pyd" />
+      </Component>
+      <Component Id="cmpED9ADF7ED2CBD9952AC9F95D27439C3E" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filE47CBA2CB7AE00F68DA2BBBE77C9AFB9" KeyPath="yes" Source="$(var.AgentDir)\_internal\_uuid.pyd" />
+      </Component>
+      <Component Id="cmp382A0BB5068885C7E4F410860FB0D84D" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="filB52E697E291AFBC9A9BC327235759B70" KeyPath="yes" Source="$(var.AgentDir)\_internal\_wmi.pyd" />
+      </Component>
+      <Component Id="cmp6529AE4296A9D91482FB6ADC27AC903E" Directory="dir29E7D615817D94377DE2CD43EEA05AB8" Guid="*">
+        <File Id="fil5E3F03B8BE642D92D9BE4D3591850401" KeyPath="yes" Source="$(var.AgentDir)\_internal\_zoneinfo.pyd" />
+      </Component>
+      <Component Id="cmp58AD9AA245032DA8A687132FD9A7993A" Directory="dirF96F8E3774D1C92A1FC4DA8819BBD23D" Guid="*">
+        <File Id="fil4EAC7FA7A4EC6FF0AAF97FEE374A5570" KeyPath="yes" Source="$(var.AgentDir)\_internal\click-8.2.1.dist-info\INSTALLER" />
+      </Component>
+      <Component Id="cmpEBA4F7ABB72A1CF3706523D196FDED06" Directory="dirF96F8E3774D1C92A1FC4DA8819BBD23D" Guid="*">
+        <File Id="fil9630A9A7FD82567F58C9F300AEABBE43" KeyPath="yes" Source="$(var.AgentDir)\_internal\click-8.2.1.dist-info\METADATA" />
+      </Component>
+      <Component Id="cmp2763D3812569A3C9ACE4537D9B645E56" Directory="dirF96F8E3774D1C92A1FC4DA8819BBD23D" Guid="*">
+        <File Id="filA3C37FADECDC2408D3417A6E99270DA3" KeyPath="yes" Source="$(var.AgentDir)\_internal\click-8.2.1.dist-info\RECORD" />
+      </Component>
+      <Component Id="cmp7CFCEB2498DF1D24224E7AC2877D2AF8" Directory="dirF96F8E3774D1C92A1FC4DA8819BBD23D" Guid="*">
+        <File Id="filB5CA053B747A2547977E3B504C742832" KeyPath="yes" Source="$(var.AgentDir)\_internal\click-8.2.1.dist-info\WHEEL" />
+      </Component>
+      <Component Id="cmpB3E3842E9847778F85136364259EB76F" Directory="dir5D4CB1368F641E1B0DCC40CB7FB5EC7F" Guid="*">
+        <File Id="filB2733EB11D93CD8A0416082E3DF69556" KeyPath="yes" Source="$(var.AgentDir)\_internal\click-8.2.1.dist-info\licenses\LICENSE.txt" />
+      </Component>
+      <Component Id="cmp5B331B9806BF999E10CA594FCF6EB70D" Directory="dir9819588459BADEB769841F929E10C96F" Guid="*">
+        <File Id="fil3245F10D5EB338A1C06315DC192923AC" KeyPath="yes" Source="$(var.AgentDir)\_internal\greenlet\_greenlet.cp313-win_amd64.pyd" />
+      </Component>
+      <Component Id="cmp173C1E94449978681930A1A7E95DCBC0" Directory="dir51CD61AFF693F7FC1A62C4A980FEB1E4" Guid="*">
+        <File Id="filB3B5C16CD48B6E3FA5D933BC107E5E4C" KeyPath="yes" Source="$(var.AgentDir)\_internal\httptools\parser\parser.cp313-win_amd64.pyd" />
+      </Component>
+      <Component Id="cmp0A7D17B95181209F505C180FAE2A8CF2" Directory="dir51CD61AFF693F7FC1A62C4A980FEB1E4" Guid="*">
+        <File Id="filCEA329724B205F54665A03EDB9173853" KeyPath="yes" Source="$(var.AgentDir)\_internal\httptools\parser\url_parser.cp313-win_amd64.pyd" />
+      </Component>
+      <Component Id="cmp3D93A01FC1376399774DC7A79C6546B9" Directory="dir626EA1467ECAC0660AE15BC2B1E45ABF" Guid="*">
+        <File Id="fil58DA75E3B504AD859E8EA46B0F89A384" KeyPath="yes" Source="$(var.AgentDir)\_internal\pydantic_core\_pydantic_core.cp313-win_amd64.pyd" />
+      </Component>
+      <Component Id="cmp4D7226942D9B317699D9619BFB73EB67" Directory="dir9A3BE1A2AABC2BC5F25765B5DB325960" Guid="*">
+        <File Id="filA0F4B21E6621431451A5ED63417DDF03" KeyPath="yes" Source="$(var.AgentDir)\_internal\setuptools\_vendor\importlib_metadata-8.0.0.dist-info\INSTALLER" />
+      </Component>
+      <Component Id="cmpF76F1EB3243AD32F5E41197B63BA9764" Directory="dir9A3BE1A2AABC2BC5F25765B5DB325960" Guid="*">
+        <File Id="fil231B841A5C0EA46C6EFA16F92ECB292D" KeyPath="yes" Source="$(var.AgentDir)\_internal\setuptools\_vendor\importlib_metadata-8.0.0.dist-info\LICENSE" />
+      </Component>
+      <Component Id="cmp1F41A9802D5B383420B08999DD48A616" Directory="dir9A3BE1A2AABC2BC5F25765B5DB325960" Guid="*">
+        <File Id="filCEE770329B1B946ACE84E7CC79DE5672" KeyPath="yes" Source="$(var.AgentDir)\_internal\setuptools\_vendor\importlib_metadata-8.0.0.dist-info\METADATA" />
+      </Component>
+      <Component Id="cmp4CD0904FB9BCEBAAD5353457DE0F029D" Directory="dir9A3BE1A2AABC2BC5F25765B5DB325960" Guid="*">
+        <File Id="fil9B8E4983EC3134525EDCEAE2A00BCA2E" KeyPath="yes" Source="$(var.AgentDir)\_internal\setuptools\_vendor\importlib_metadata-8.0.0.dist-info\RECORD" />
+      </Component>
+      <Component Id="cmp276E8D18D41CFC5A27137C31F4CFD028" Directory="dir9A3BE1A2AABC2BC5F25765B5DB325960" Guid="*">
+        <File Id="filD7883F91F7751BD20B047FDB2CE905BC" KeyPath="yes" Source="$(var.AgentDir)\_internal\setuptools\_vendor\importlib_metadata-8.0.0.dist-info\REQUESTED" />
+      </Component>
+      <Component Id="cmp8278ACD9289B4273D960F3B5D17DA64B" Directory="dir9A3BE1A2AABC2BC5F25765B5DB325960" Guid="*">
+        <File Id="fil35726F6FCFB6A92CA425B4E7CAFA880A" KeyPath="yes" Source="$(var.AgentDir)\_internal\setuptools\_vendor\importlib_metadata-8.0.0.dist-info\top_level.txt" />
+      </Component>
+      <Component Id="cmpAEF4A649B3FFBCFE242F1B5C101C0FDE" Directory="dir9A3BE1A2AABC2BC5F25765B5DB325960" Guid="*">
+        <File Id="fil2F23083CC13F0732CE3644F2A448F215" KeyPath="yes" Source="$(var.AgentDir)\_internal\setuptools\_vendor\importlib_metadata-8.0.0.dist-info\WHEEL" />
+      </Component>
+      <Component Id="cmp7B5E053250F769CC306B48E8EC683CC7" Directory="dir9A5DB7E8F0A1962A6C152C28C3517503" Guid="*">
+        <File Id="fil012BEB6F306B68B8A98361124AE9570F" KeyPath="yes" Source="$(var.AgentDir)\_internal\setuptools\_vendor\jaraco\text\Lorem ipsum.txt" />
+      </Component>
+      <Component Id="cmp03171B179C3EF1EBF5FFF095D82B222E" Directory="dir6BD2F87D13627AFAE164F61E5A9C654A" Guid="*">
+        <File Id="fil7E5B6C1038DECDCD17C394588BFD5666" KeyPath="yes" Source="$(var.AgentDir)\_internal\sqlalchemy\cyextension\collections.cp313-win_amd64.pyd" />
+      </Component>
+      <Component Id="cmp7223D725242B3C12ED89A6C5C37088FE" Directory="dir6BD2F87D13627AFAE164F61E5A9C654A" Guid="*">
+        <File Id="fil8C33449BD1A6BF2EC78828F6DCD116D5" KeyPath="yes" Source="$(var.AgentDir)\_internal\sqlalchemy\cyextension\immutabledict.cp313-win_amd64.pyd" />
+      </Component>
+      <Component Id="cmpC47288A6651ADCDBD83A6AD316386B2A" Directory="dir6BD2F87D13627AFAE164F61E5A9C654A" Guid="*">
+        <File Id="fil4ED07E245EA6703D923EF42B1FEAA63C" KeyPath="yes" Source="$(var.AgentDir)\_internal\sqlalchemy\cyextension\processors.cp313-win_amd64.pyd" />
+      </Component>
+      <Component Id="cmpC0F95C4183E94CB2DA910A2EA0E799C0" Directory="dir6BD2F87D13627AFAE164F61E5A9C654A" Guid="*">
+        <File Id="filA3373F5637879D5526835CA4E424688D" KeyPath="yes" Source="$(var.AgentDir)\_internal\sqlalchemy\cyextension\resultproxy.cp313-win_amd64.pyd" />
+      </Component>
+      <Component Id="cmpAD3048FC92CA4A1DF0E4078E57829396" Directory="dir6BD2F87D13627AFAE164F61E5A9C654A" Guid="*">
+        <File Id="filB817236943E937D9BE2C9CF346DFD786" KeyPath="yes" Source="$(var.AgentDir)\_internal\sqlalchemy\cyextension\util.cp313-win_amd64.pyd" />
+      </Component>
+      <Component Id="cmpF13CA9D04933A9E825A36C71C1A78B04" Directory="dir9214A0DB0EF71819C66D0A7C2B35DD5F" Guid="*">
+        <File Id="fil45F3E34D72B92D55C72095116AB9C3EB" KeyPath="yes" Source="$(var.AgentDir)\_internal\watchfiles\_rust_notify.cp313-win_amd64.pyd" />
+      </Component>
+      <Component Id="cmpC36A7B5ACBEF47AF3E7C2C0EEAFAD65B" Directory="dirAE80273AEB2434AA72DB3F53EDA1BB4C" Guid="*">
+        <File Id="fil795546E4DD74A07A1A3A42860C198D0B" KeyPath="yes" Source="$(var.AgentDir)\_internal\websockets\speedups.cp313-win_amd64.pyd" />
+      </Component>
+      <Component Id="cmp1CFDAE0566CB8BF47E5BCABF560FC354" Directory="dirC77E81B5829EDC91842FC78D4DC84E81" Guid="*">
+        <File Id="filF54A53C0C35845E2DB209A36299419A1" KeyPath="yes" Source="$(var.AgentDir)\_internal\websockets-15.0.1.dist-info\entry_points.txt" />
+      </Component>
+      <Component Id="cmp2C1836FFE9C77733F181CC69C92C8011" Directory="dirC77E81B5829EDC91842FC78D4DC84E81" Guid="*">
+        <File Id="fil95DC9FF652FF293598F10E7D963C0912" KeyPath="yes" Source="$(var.AgentDir)\_internal\websockets-15.0.1.dist-info\INSTALLER" />
+      </Component>
+      <Component Id="cmp6C76AA56B1818AE9C833D90244E7C3AE" Directory="dirC77E81B5829EDC91842FC78D4DC84E81" Guid="*">
+        <File Id="filFF05A8A8EB9B9A7BDE65E69FFB82F3CA" KeyPath="yes" Source="$(var.AgentDir)\_internal\websockets-15.0.1.dist-info\LICENSE" />
+      </Component>
+      <Component Id="cmp56E71715E1B31B0647A365315241D5A6" Directory="dirC77E81B5829EDC91842FC78D4DC84E81" Guid="*">
+        <File Id="fil170D0F9B2404A23F13F9E917D56B03C5" KeyPath="yes" Source="$(var.AgentDir)\_internal\websockets-15.0.1.dist-info\METADATA" />
+      </Component>
+      <Component Id="cmp03A0323A661D0E6DD43377EC97AC5CDF" Directory="dirC77E81B5829EDC91842FC78D4DC84E81" Guid="*">
+        <File Id="fil60BDAC65D079EFDAD7B63B2D8224221B" KeyPath="yes" Source="$(var.AgentDir)\_internal\websockets-15.0.1.dist-info\RECORD" />
+      </Component>
+      <Component Id="cmp6A994E572BFC232F207D9DFEEA953124" Directory="dirC77E81B5829EDC91842FC78D4DC84E81" Guid="*">
+        <File Id="fil9D4160676AAF36B69ECC47690814B34B" KeyPath="yes" Source="$(var.AgentDir)\_internal\websockets-15.0.1.dist-info\top_level.txt" />
+      </Component>
+      <Component Id="cmp20CF949808A9D4F5AF1A309B421CD58C" Directory="dirC77E81B5829EDC91842FC78D4DC84E81" Guid="*">
+        <File Id="fil81EDD8859268E7FF1D2848FD86E952DF" KeyPath="yes" Source="$(var.AgentDir)\_internal\websockets-15.0.1.dist-info\WHEEL" />
+      </Component>
+      <Component Id="cmp092FAB71E66F7BAC8622CDB025AADF7F" Directory="dir4473CCD4EBFC6B0EF7D09EB8BFCD11B8" Guid="*">
+        <File Id="filF0452D4A2C100D058373EA9C0D1DD270" KeyPath="yes" Source="$(var.AgentDir)\_internal\win32\win32api.pyd" />
+      </Component>
+      <Component Id="cmp7DB0184556DBF1B356BA4454D9DF36BD" Directory="dir4473CCD4EBFC6B0EF7D09EB8BFCD11B8" Guid="*">
+        <File Id="filA8A71A1B3194A1A24098E384A2ED5B3B" KeyPath="yes" Source="$(var.AgentDir)\_internal\win32\win32evtlog.pyd" />
+      </Component>
+      <Component Id="cmp2BCCF065C2EA26193299BBB6E0020345" Directory="dir11CEA3191A1CBBFB050F90BCD8420363" Guid="*">
+        <File Id="fil1B0394954B471F89B002BC7BCDF7445B" KeyPath="yes" Source="$(var.AgentDir)\_internal\yaml\_yaml.cp313-win_amd64.pyd" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir29E7D615817D94377DE2CD43EEA05AB8">
+      <Directory Id="dir11CEA3191A1CBBFB050F90BCD8420363" Name="yaml" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dirF2C6272861E57A3DF27FD17258939AC7">
+      <Directory Id="dir24862AF449D5EBD9109794E021EE5DB4" Name="_vendor" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir29E7D615817D94377DE2CD43EEA05AB8">
+      <Directory Id="dir4473CCD4EBFC6B0EF7D09EB8BFCD11B8" Name="win32" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir29E7D615817D94377DE2CD43EEA05AB8">
+      <Directory Id="dir4F092C48C7394E70C77F6550B9B07459" Name="httptools" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir4F092C48C7394E70C77F6550B9B07459">
+      <Directory Id="dir51CD61AFF693F7FC1A62C4A980FEB1E4" Name="parser" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dirF96F8E3774D1C92A1FC4DA8819BBD23D">
+      <Directory Id="dir5D4CB1368F641E1B0DCC40CB7FB5EC7F" Name="licenses" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir29E7D615817D94377DE2CD43EEA05AB8">
+      <Directory Id="dir626EA1467ECAC0660AE15BC2B1E45ABF" Name="pydantic_core" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir9B7F48E46FFB40C188600BA10BA493BB">
+      <Directory Id="dir6BD2F87D13627AFAE164F61E5A9C654A" Name="cyextension" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir24862AF449D5EBD9109794E021EE5DB4">
+      <Directory Id="dir89214D78FA3AE7B543068D22CCF5BED7" Name="jaraco" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir29E7D615817D94377DE2CD43EEA05AB8">
+      <Directory Id="dir9214A0DB0EF71819C66D0A7C2B35DD5F" Name="watchfiles" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir29E7D615817D94377DE2CD43EEA05AB8">
+      <Directory Id="dir9819588459BADEB769841F929E10C96F" Name="greenlet" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir24862AF449D5EBD9109794E021EE5DB4">
+      <Directory Id="dir9A3BE1A2AABC2BC5F25765B5DB325960" Name="importlib_metadata-8.0.0.dist-info" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir89214D78FA3AE7B543068D22CCF5BED7">
+      <Directory Id="dir9A5DB7E8F0A1962A6C152C28C3517503" Name="text" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir29E7D615817D94377DE2CD43EEA05AB8">
+      <Directory Id="dir9B7F48E46FFB40C188600BA10BA493BB" Name="sqlalchemy" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir29E7D615817D94377DE2CD43EEA05AB8">
+      <Directory Id="dirAE80273AEB2434AA72DB3F53EDA1BB4C" Name="websockets" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir29E7D615817D94377DE2CD43EEA05AB8">
+      <Directory Id="dirC77E81B5829EDC91842FC78D4DC84E81" Name="websockets-15.0.1.dist-info" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir29E7D615817D94377DE2CD43EEA05AB8">
+      <Directory Id="dirF2C6272861E57A3DF27FD17258939AC7" Name="setuptools" />
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="dir29E7D615817D94377DE2CD43EEA05AB8">
+      <Directory Id="dirF96F8E3774D1C92A1FC4DA8819BBD23D" Name="click-8.2.1.dist-info" />
+    </DirectoryRef>
+  </Fragment>
+</Wix>

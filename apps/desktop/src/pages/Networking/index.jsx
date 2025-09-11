@@ -10,6 +10,7 @@ import {
   selectGateways,
 } from "../../state/selectors.js";
 import "../../styles/networking.css";
+import { toast } from "../../components/Toast.jsx";
 
 function ipToInt(ip) {
   const parts = (ip || "").split(".").map((n) => parseInt(n, 10));
@@ -30,7 +31,7 @@ function Dot({ status }) {
       ? "#22a06b"
       : status === "degraded"
       ? "#b37feb"
-      : status === "connecting"
+      : status === "connecting" || status === "reconnecting"
       ? "#f59e0b"
       : status === "fail"
       ? "#ef4444"
@@ -78,7 +79,13 @@ export function Networking({ onProceed }) {
 
   const [gwName, setGwName] = useState("");
   const [gwEditingId, setGwEditingId] = useState(null);
-  const [gwDraft, setGwDraft] = useState({ name: "", host: "", ports: [], protocol_hint: "", nic_hint: "" });
+  const [gwDraft, setGwDraft] = useState({
+    name: "",
+    host: "",
+    ports: [],
+    protocol_hint: "",
+    nic_hint: "",
+  });
   const [gwBusyIds, setGwBusyIds] = useState(new Set());
 
   const runPing = async () => {
@@ -146,45 +153,84 @@ export function Networking({ onProceed }) {
       const name = (gwDraft.name || "").trim();
       const host = (gwDraft.host || "").trim();
       if (!name || !host) return;
-      const payload = { name, host, ports: gwDraft.ports || [], protocol_hint: gwDraft.protocol_hint || undefined, nic_hint: gwDraft.nic_hint || undefined };
+      const payload = {
+        name,
+        host,
+        ports: gwDraft.ports || [],
+        protocol_hint: gwDraft.protocol_hint || undefined,
+        nic_hint: gwDraft.nic_hint || undefined,
+      };
       const res = await addGateway(payload);
       if (res?.item) {
         dispatch({ type: "GW_ADD", gateway: res.item });
-        setGwDraft({ name: "", host: "", ports: [], protocol_hint: "", nic_hint: "" });
+        setGwDraft({
+          name: "",
+          host: "",
+          ports: [],
+          protocol_hint: "",
+          nic_hint: "",
+        });
       }
     } catch {}
   };
   const pingGw = async (g) => {
     try {
       setGwBusyIds(new Set([...gwBusyIds, g.id]));
-      const { pingGateway, listGateways } = await import("../../lib/api/networking.js");
+      const { pingGateway, listGateways } = await import(
+        "../../lib/api/networking.js"
+      );
       await pingGateway(g.id, { count: 3, timeoutMs: 800 });
       const gs = await listGateways();
       (gs.items || []).forEach((x) => dispatch({ type: "GW_ADD", gateway: x }));
     } catch {}
-    setGwBusyIds((prev) => { const cp = new Set(prev); cp.delete(g.id); return cp; });
+    setGwBusyIds((prev) => {
+      const cp = new Set(prev);
+      cp.delete(g.id);
+      return cp;
+    });
   };
   const tcpGw = async (g) => {
     try {
       setGwBusyIds(new Set([...gwBusyIds, g.id]));
-      const { tcpGateway, listGateways } = await import("../../lib/api/networking.js");
-      await tcpGateway(g.id, { ports: g.ports && g.ports.length ? g.ports : [502, 4840] });
+      const { tcpGateway, listGateways } = await import(
+        "../../lib/api/networking.js"
+      );
+      await tcpGateway(g.id, {
+        ports: g.ports && g.ports.length ? g.ports : [502, 4840],
+      });
       const gs = await listGateways();
       (gs.items || []).forEach((x) => dispatch({ type: "GW_ADD", gateway: x }));
     } catch {}
-    setGwBusyIds((prev) => { const cp = new Set(prev); cp.delete(g.id); return cp; });
+    setGwBusyIds((prev) => {
+      const cp = new Set(prev);
+      cp.delete(g.id);
+      return cp;
+    });
   };
   const useInAddDevice = (g) => {
     setLeft("connect");
-    const common = (g.ports && g.ports[0]) || (g.protocol_hint === "opcua" ? 4840 : 502);
+    const common =
+      (g.ports && g.ports[0]) || (g.protocol_hint === "opcua" ? 4840 : 502);
     setProto(g.protocol_hint === "opcua" ? "opcua" : "modbus");
     setFb((prev) => ({ ...prev, host: g.host, port: common }));
-    setUa((prev) => ({ ...prev, endpoint: g.protocol_hint === "opcua" ? `opc.tcp://${g.host}:${common}` : prev.endpoint }));
+    setUa((prev) => ({
+      ...prev,
+      endpoint:
+        g.protocol_hint === "opcua"
+          ? `opc.tcp://${g.host}:${common}`
+          : prev.endpoint,
+    }));
   };
   const saveGwEdit = async (g) => {
     try {
       const { updateGateway } = await import("../../lib/api/networking.js");
-      const payload = { name: gwDraft.name, host: gwDraft.host, ports: gwDraft.ports, protocol_hint: gwDraft.protocol_hint, nic_hint: gwDraft.nic_hint };
+      const payload = {
+        name: gwDraft.name,
+        host: gwDraft.host,
+        ports: gwDraft.ports,
+        protocol_hint: gwDraft.protocol_hint,
+        nic_hint: gwDraft.nic_hint,
+      };
       const res = await updateGateway(g.id, payload);
       if (res?.item) dispatch({ type: "GW_ADD", gateway: res.item });
       setGwEditingId(null);
@@ -193,7 +239,13 @@ export function Networking({ onProceed }) {
   const duplicateGw = async (g) => {
     try {
       const { addGateway } = await import("../../lib/api/networking.js");
-      const res = await addGateway({ name: `${g.name} (copy)`, host: g.host, ports: g.ports || [], protocol_hint: g.protocol_hint, nic_hint: g.nic_hint });
+      const res = await addGateway({
+        name: `${g.name} (copy)`,
+        host: g.host,
+        ports: g.ports || [],
+        protocol_hint: g.protocol_hint,
+        nic_hint: g.nic_hint,
+      });
       if (res?.item) dispatch({ type: "GW_ADD", gateway: res.item });
     } catch {}
   };
@@ -308,7 +360,12 @@ export function Networking({ onProceed }) {
     const params = proto === "modbus" ? fb : ua;
     try {
       const { createDevice } = await import("../../lib/api/networking.js");
-      const res = await createDevice({ name, protocol: proto, params });
+      const res = await createDevice({
+        name,
+        protocol: proto,
+        params,
+        autoReconnect: true,
+      });
       if (res && res.item) {
         if (
           devices.some(
@@ -438,6 +495,24 @@ export function Networking({ onProceed }) {
       } catch {}
     })();
   }, []);
+
+  // Light polling to keep device statuses fresh (for auto-reconnect feedback)
+  useEffect(() => {
+    let timer = null;
+    (async function poll() {
+      try {
+        const { listDevices } = await import("../../lib/api/networking.js");
+        const devs = await listDevices();
+        (devs.items || []).forEach((d) =>
+          dispatch({ type: "DEV_ADD", device: d })
+        );
+      } catch {}
+      timer = setTimeout(poll, 3000);
+    })();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [dispatch]);
 
   // Left rail item component
   const LeftItem = ({ id, title, subtitle, badge, active, onClick }) => (
@@ -661,7 +736,9 @@ export function Networking({ onProceed }) {
             <div className="row">
               <button
                 onClick={async () => {
-                  const { listGateways } = await import("../../lib/api/networking.js");
+                  const { listGateways } = await import(
+                    "../../lib/api/networking.js"
+                  );
                   const gs = await listGateways();
                   (gs.items || []).forEach((g) =>
                     dispatch({ type: "GW_ADD", gateway: g })
@@ -670,8 +747,20 @@ export function Networking({ onProceed }) {
               >
                 Refresh
               </button>
-              <button onClick={async () => { for (const g of gateways) await pingGw(g); }}>Ping All</button>
-              <button onClick={async () => { for (const g of gateways) await tcpGw(g); }}>Test All Ports</button>
+              <button
+                onClick={async () => {
+                  for (const g of gateways) await pingGw(g);
+                }}
+              >
+                Ping All
+              </button>
+              <button
+                onClick={async () => {
+                  for (const g of gateways) await tcpGw(g);
+                }}
+              >
+                Test All Ports
+              </button>
             </div>
             <div className="card" style={{ marginTop: 12 }}>
               <div className="grid">
@@ -679,12 +768,16 @@ export function Networking({ onProceed }) {
                   <label>Name</label>
                   <input
                     value={gwDraft.name}
-                    onChange={(e) => setGwDraft({ ...gwDraft, name: e.target.value })}
+                    onChange={(e) =>
+                      setGwDraft({ ...gwDraft, name: e.target.value })
+                    }
                   />
                   <label>Host</label>
                   <input
                     value={gwDraft.host}
-                    onChange={(e) => setGwDraft({ ...gwDraft, host: e.target.value })}
+                    onChange={(e) =>
+                      setGwDraft({ ...gwDraft, host: e.target.value })
+                    }
                     placeholder="IP or host"
                   />
                   <label>Ports</label>
@@ -728,50 +821,141 @@ export function Networking({ onProceed }) {
               </div>
               {gateways.map((g) => {
                 const editing = gwEditingId === g.id;
-                const ports = g.ports && g.ports.length ? g.ports.join(',') : '';
-                const status = g.status || ((Array.isArray(g.last_tcp) && g.last_tcp.some((r)=>r.status==='open')) || g.last_ping?.ok ? 'reachable' : 'unknown');
+                const ports =
+                  g.ports && g.ports.length ? g.ports.join(",") : "";
+                const status =
+                  g.status ||
+                  ((Array.isArray(g.last_tcp) &&
+                    g.last_tcp.some((r) => r.status === "open")) ||
+                  g.last_ping?.ok
+                    ? "reachable"
+                    : "unknown");
                 return (
                   <div key={g.id} className="row line">
                     <div className="cell name">
                       {editing ? (
-                        <input value={gwDraft.name} onChange={(e)=>setGwDraft({ ...gwDraft, name: e.target.value })} />
+                        <input
+                          value={gwDraft.name}
+                          onChange={(e) =>
+                            setGwDraft({ ...gwDraft, name: e.target.value })
+                          }
+                        />
                       ) : (
                         <>{g.name}</>
                       )}
                     </div>
                     <div className="cell proto">
                       {editing ? (
-                        <input value={gwDraft.host} onChange={(e)=>setGwDraft({ ...gwDraft, host: e.target.value })} />
+                        <input
+                          value={gwDraft.host}
+                          onChange={(e) =>
+                            setGwDraft({ ...gwDraft, host: e.target.value })
+                          }
+                        />
                       ) : (
                         <>{g.host}</>
                       )}
                     </div>
                     <div className="cell lat">
                       {editing ? (
-                        <input value={gwDraft.ports?.join(',')||''} onChange={(e)=>setGwDraft({ ...gwDraft, ports: (e.target.value||'').split(',').map(s=>parseInt(s,10)).filter(n=>!Number.isNaN(n)) })} />
+                        <input
+                          value={gwDraft.ports?.join(",") || ""}
+                          onChange={(e) =>
+                            setGwDraft({
+                              ...gwDraft,
+                              ports: (e.target.value || "")
+                                .split(",")
+                                .map((s) => parseInt(s, 10))
+                                .filter((n) => !Number.isNaN(n)),
+                            })
+                          }
+                        />
                       ) : (
                         <>{ports}</>
                       )}
                     </div>
                     <div className="cell lat">
-                      <Dot status={status==='reachable'? 'ok' : status==='limited'? 'degraded' : status==='unreachable'? 'fail' : 'connecting'} /> {status}
+                      <Dot
+                        status={
+                          status === "reachable"
+                            ? "ok"
+                            : status === "limited"
+                            ? "degraded"
+                            : status === "unreachable"
+                            ? "fail"
+                            : "connecting"
+                        }
+                      />{" "}
+                      {status}
                     </div>
                     <div className="cell act">
                       {!editing && (
                         <>
-                          <button onClick={() => pingGw(g)} disabled={gwBusyIds.has(g.id)}>Ping</button>
-                          <button onClick={() => tcpGw(g)} disabled={gwBusyIds.has(g.id)}>TCP Test</button>
-                          <button onClick={() => useInAddDevice(g)}>Use in Add Device</button>
-                          <button onClick={() => { setGwEditingId(g.id); setGwDraft({ name: g.name, host: g.host, ports: g.ports||[], protocol_hint: g.protocol_hint || '', nic_hint: g.nic_hint || '' }); }}>Edit</button>
-                          <button onClick={() => duplicateGw(g)}>Duplicate</button>
-                          <button onClick={async ()=>{ try { await navigator.clipboard?.writeText(JSON.stringify(g)); } catch {} }}>Export</button>
-                          <button onClick={async ()=>{ if (!confirm(`Delete ${g.name}?`)) return; try { const { deleteGateway } = await import("../../lib/api/networking.js"); await deleteGateway(g.id); dispatch({ type: "GW_DELETE", id: g.id }); } catch {} }}>Delete</button>
+                          <button
+                            onClick={() => pingGw(g)}
+                            disabled={gwBusyIds.has(g.id)}
+                          >
+                            Ping
+                          </button>
+                          <button
+                            onClick={() => tcpGw(g)}
+                            disabled={gwBusyIds.has(g.id)}
+                          >
+                            TCP Test
+                          </button>
+                          <button onClick={() => useInAddDevice(g)}>
+                            Use in Add Device
+                          </button>
+                          <button
+                            onClick={() => {
+                              setGwEditingId(g.id);
+                              setGwDraft({
+                                name: g.name,
+                                host: g.host,
+                                ports: g.ports || [],
+                                protocol_hint: g.protocol_hint || "",
+                                nic_hint: g.nic_hint || "",
+                              });
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button onClick={() => duplicateGw(g)}>
+                            Duplicate
+                          </button>
+                          <button
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard?.writeText(
+                                  JSON.stringify(g)
+                                );
+                              } catch {}
+                            }}
+                          >
+                            Export
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (!confirm(`Delete ${g.name}?`)) return;
+                              try {
+                                const { deleteGateway } = await import(
+                                  "../../lib/api/networking.js"
+                                );
+                                await deleteGateway(g.id);
+                                dispatch({ type: "GW_DELETE", id: g.id });
+                              } catch {}
+                            }}
+                          >
+                            Delete
+                          </button>
                         </>
                       )}
                       {editing && (
                         <>
                           <button onClick={() => saveGwEdit(g)}>Save</button>
-                          <button onClick={() => setGwEditingId(null)}>Cancel</button>
+                          <button onClick={() => setGwEditingId(null)}>
+                            Cancel
+                          </button>
                         </>
                       )}
                     </div>
@@ -1199,16 +1383,29 @@ export function Networking({ onProceed }) {
                     </button>
                     <button
                       onClick={async () => {
-                        if (!confirm("Delete this target? This only removes it from the app.")) return;
+                        if (
+                          !confirm(
+                            "Delete this target? This only removes it from the app."
+                          )
+                        )
+                          return;
                         try {
-                          const { deleteDbTarget } = await import("../../lib/api/networking.js");
+                          const { deleteDbTarget } = await import(
+                            "../../lib/api/networking.js"
+                          );
                           await deleteDbTarget(t.id);
                           dispatch({ type: "DB_DELETE_TARGET", id: t.id });
                         } catch (e) {
-                          const body = e?.body || e?.message || '';
-                          if (String(body).includes('TARGET_IS_DEFAULT')) alert('Cannot delete Default target. Set another Default first.');
-                          else if (String(body).includes('TARGET_IN_USE')) alert('Target in use by logical tables. Reassign or remove them first.');
-                          else alert('Delete failed');
+                          const body = e?.body || e?.message || "";
+                          if (String(body).includes("TARGET_IS_DEFAULT"))
+                            alert(
+                              "Cannot delete Default target. Set another Default first."
+                            );
+                          else if (String(body).includes("TARGET_IN_USE"))
+                            alert(
+                              "Target in use by logical tables. Reassign or remove them first."
+                            );
+                          else alert("Delete failed");
                         }
                       }}
                     >
@@ -1249,5 +1446,3 @@ export function Networking({ onProceed }) {
     </div>
   );
 }
-
-

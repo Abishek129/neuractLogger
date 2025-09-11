@@ -1,82 +1,74 @@
-# ---- OS / Editor noise ----
-.DS_Store
+# Top-level Git ignore for PLC Logger project
+
+# OS / General
+*.DS_Store
 Thumbs.db
-ehthumbs.db
-Desktop.ini
+*.tmp
+*.bak
 *.swp
 *.swo
-*~
+*.orig
+
+# Editor settings
 .vscode/
 .idea/
-*.iml
 
-# ---- Logs ----
-logs/
-*.log
-npm-debug.log*
-yarn-debug.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-# ---- Env files ----
+# Environment files (keep secrets out of VCS)
 .env
 .env.*
-!.env.example
-!agent/.env.example
-!apps/desktop/.env.example
+*.env
 
-# ---- Python ----
+# Logs
+*.log
+logs/
+
+# Databases and local data
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
 __pycache__/
-*.py[cod]
-*$py.class
-.Python
-.venv/
-venv/
-ENV/
-env/
-pip-wheel-metadata/
-*.egg-info/
-.eggs/
-dist/
-build/
-develop-eggs/
-.installed.cfg
+*.pyc
+*.pyo
+*.pyd
 .pytest_cache/
 .mypy_cache/
-.pyre/
-.pytype/
 .ruff_cache/
-.tox/
 .coverage
-.coverage.*
-.cache/
+coverage.xml
+.venv/
+venv/
 
-# ---- Node / Vite ----
-node_modules/
-.npm/
-.pnpm-store/
-.eslintcache
-.stylelintcache
-.turbo/
-coverage/
-dist/
+# PyInstaller outputs
 build/
-.parcel-cache/
+dist/
 
-# App-specific (Desktop)
+# Node / Vite (apps/desktop)
 apps/desktop/node_modules/
-apps/desktop/dist/
-apps/desktop/coverage/
 apps/desktop/.vite/
-apps/desktop/.vercel/
+apps/desktop/.eslintcache
+apps/desktop/dist/
 
-# ---- Tauri / Rust (binary output) ----
+# Rust / Tauri (apps/desktop/src-tauri)
 apps/desktop/src-tauri/target/
-apps/desktop/src-tauri/.cargo/
-*.pdb
-# Note: keep Cargo.lock tracked for binary projects
+apps/desktop/src-tauri/gen/
 
-# ---- Misc ----
-tmp/
-temp/
-~$*
+# WiX / Installer artifacts
+installer/**/*.wixobj
+installer/**/*.wixpdb
+installer/**/*.wixout
+installer/**/*.wixproj.user
+installer/**/*.wixproj.bin
+installer/**/*.cab
+installer/**/*.msi
+
+# PowerShell transient files
+*.ps1xml
+
+# Repo-local scratch files (seen in this project)
+/tmp_*
+/query*
+/qc
+/file
+

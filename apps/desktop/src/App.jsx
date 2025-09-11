@@ -3,6 +3,7 @@ import { Tabs, Tab, Box, Paper, CssBaseline } from "@mui/material";
 import { useApp } from "./state/store.jsx";
 import { selectGateSatisfied } from "./state/selectors.js";
 import { Networking } from "./pages/Networking/index.jsx";
+import { Toast } from "./components";
 import { TablesMapping } from "./pages/TablesMapping/index.jsx";
 import { LoggingSchedules } from "./pages/LoggingSchedules/index.jsx";
 
@@ -39,6 +40,7 @@ export default function App() {
         p: 2,
       }}
     >
+      <Toast />
       <CssBaseline />
       <Box sx={{ mb: 1.5, typography: "h5" }}>Neuract Logger</Box>
 

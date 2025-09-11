@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Fragment>
+        <DirectoryRef Id="UIDIR" />
+    </Fragment>
+    <Fragment>
+        <ComponentGroup Id="UiGroup">
+            <Component Id="cmpC234276E42BBCA58B18FF779042320A0" Directory="UIDIR" Guid="*">
+                <File Id="filD2B04ABEEB9606496E98262221368F4E" KeyPath="yes" Source="$(var.UiDir)\plc-logger-tray.exe" />
+            </Component>
+        </ComponentGroup>
+    </Fragment>
+</Wix>

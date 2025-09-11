@@ -35,3 +35,8 @@
 .tables .gate { position: sticky; bottom: 0; left: 0; right: 0; background: #ffffff; border-top: 1px solid #e5e7eb; padding: 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; }
 .tables .checks { display: flex; gap: 18px; color: #374151; }
 
+/* Modal overlay for Mapping */
+.tables .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-start; justify-content: center; padding: 40px 20px; z-index: 1000; }
+.tables .modal { width: min(1100px, 96vw); background: #fff; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); overflow: hidden; }
+.tables .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #eee; }
+.tables .modal-body { padding: 12px; max-height: min(75vh, 900px); overflow: auto; }

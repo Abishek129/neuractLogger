@@ -6,13 +6,15 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
-    "frontendDist": "dist",
+    "frontendDist": "../dist",
     "devUrl": "http://localhost:5173"
   },
   "app": {
     "windows": [
-      { "title": "PLC Logger", "width": 1280, "height": 800 }
-    ]
+      { "title": "PLC Logger", "width": 1280, "height": 800, "visible": true }
+    ],
+    "security": {
+      "csp": null
+    }
   }
 }
-

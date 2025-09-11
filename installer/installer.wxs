@@ -1,0 +1,24 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="PLC Logger" Manufacturer="PLCLogger" Version="0.1.0" UpgradeCode="{E4D7E1-C0DE-4C3B-9BFE-111111111111}" InstallerVersion="500">
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed."/>
+    <Feature Id="MainFeature" Title="PLC Logger" Level="1">
+      <ComponentGroupRef Id="AgentFiles"/>
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <Directory Id="ProgramFilesFolder">
+      <Directory Id="INSTALLDIR" Name="PLCLogger">
+        <Directory Id="AGENTDIR" Name="agent" />
+      </Directory>
+    </Directory>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="AgentFiles">
+      <!-- Replace with harvested files from dist/plclogger-agent -->
+      <!-- Example: <Component Id="AgentExe" Directory="AGENTDIR"><File Source="dist\plclogger-agent\run_agent.exe"/></Component> -->
+    </ComponentGroup>
+  </Fragment>
+</Wix>

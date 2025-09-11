@@ -1,6 +1,7 @@
 export const selectReachability = (s) => s.reachability
 export const selectDevices = (s) => s.devices
 export const selectDbTargets = (s) => s.dbTargets
+export const selectGateways = (s) => s.gateways
 export const selectDefaultDbTargetId = (s) => s.defaultDbTargetId
 
 export const selectHasConnectedDevice = (s) => s.devices.some(d => d.status === 'connected')
@@ -25,10 +26,25 @@ export const selectTableMappingStatus = (s, tableId) => {
   const sch = s.schemas.find(sc => sc.id === t.schemaId)
   const rows = (s.mappings[tableId]) || {}
   const total = sch?.fields?.length || 0
-  const mapped = Object.values(rows).filter(r => r && r.protocol && r.address && r.dataType).length
+  if (total === 0) return Object.keys(rows).length ? 'Mapped' : 'Unmapped'
+  const dev = s.devices.find(d => d.id === t.deviceId)
+  const proto = (dev?.protocol || '').toLowerCase()
+  let mapped = 0
+  for (const f of (sch?.fields || [])) {
+    const r = rows[f.key] || {}
+    const rp = (r.protocol || '').toLowerCase()
+    const useProto = proto || rp
+    if (useProto === 'opcua') {
+      if (r && r.address) mapped++
+    } else if (useProto === 'modbus') {
+      if (r && r.address && r.dataType) mapped++
+    } else {
+      // Unknown: accept address as minimal mapping signal
+      if (r && r.address) mapped++
+    }
+  }
   if (mapped === 0) return 'Unmapped'
-  if (mapped < total) return 'Partially mapped'
-  // naive validity: all mapped with required fields present
+  if (mapped < total) return 'Partially Mapped'
   return 'Mapped'
 }
 

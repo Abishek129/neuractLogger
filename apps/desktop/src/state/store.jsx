@@ -13,9 +13,13 @@ const initial = {
     target: '',
     lastPing: null, // { success, lossPct, min, avg, max, samples: number[] }
     portTests: [], // [{ port, status: 'open'|'closed'|'timeout', timeMs }]
+    isPinging: false,
+    isPortTesting: false,
   },
   // Saved devices
   devices: [], // [{ id, name, protocol: 'modbus'|'opcua', status, latencyMs, lastError, params }]
+  // Saved gateways (from Reachability)
+  gateways: [], // [{ id, name, host, adapterId }]
   // Database targets
   dbTargets: [], // [{ id, provider, conn, status: 'untested'|'ok'|'fail', lastMsg }]
   defaultDbTargetId: null,
@@ -33,34 +37,114 @@ const initial = {
 function reducer(state, action) {
   switch (action.type) {
     // Reachability
+    case 'NET_PING_PENDING':
+      return { ...state, reachability: { ...state.reachability, isPinging: true } }
     case 'NET_SET_ADAPTER':
       return { ...state, reachability: { ...state.reachability, adapterId: action.id } }
     case 'NET_SET_TARGET':
       return { ...state, reachability: { ...state.reachability, target: action.target } }
     case 'NET_SET_PING_RESULT':
-      return { ...state, reachability: { ...state.reachability, lastPing: action.result } }
+      return { ...state, reachability: { ...state.reachability, lastPing: action.result, isPinging: false } }
+    case 'NET_PORTS_PENDING':
+      return { ...state, reachability: { ...state.reachability, isPortTesting: true } }
     case 'NET_SET_PORT_RESULTS':
-      return { ...state, reachability: { ...state.reachability, portTests: action.results } }
+      return { ...state, reachability: { ...state.reachability, portTests: action.results, isPortTesting: false } }
+
+    // Saved Gateways
+    case 'GW_ADD': {
+      const gw = action.gateway || {}
+      // Upsert by id if present, else by (name or host)
+      let updated = false
+      const gateways = state.gateways.map(g => {
+        if ((gw.id && g.id === gw.id) || (!gw.id && (g.name === gw.name || g.host === gw.host))) {
+          updated = true
+          return { ...g, ...gw }
+        }
+        return g
+      })
+      const list = updated ? gateways : [...gateways, gw]
+      return { ...state, gateways: list }
+    }
+    case 'GW_DELETE': {
+      const gateways = state.gateways.filter(g => g.id !== action.id)
+      return { ...state, gateways }
+    }
 
     // Devices
-    case 'DEV_ADD':
-      return { ...state, devices: [...state.devices, action.device] }
+    case 'DEV_SET_ALL': {
+      const seen = new Set()
+      const items = []
+      for (const d of (action.items||[])) {
+        if (!d || !d.id || seen.has(d.id)) continue
+        seen.add(d.id)
+        items.push(d)
+      }
+      return { ...state, devices: items }
+    }
+    case 'DEV_ADD': {
+      const d = action.device
+      let updated = false
+      const devices = (state.devices||[]).map(x => {
+        if (x.id === d.id || (x.name||'').toLowerCase() === (d.name||'').toLowerCase()) { updated = true; return { ...x, ...d } }
+        return x
+      })
+      return { ...state, devices: updated ? devices : [...devices, d] }
+    }
     case 'DEV_UPDATE_STATUS': {
       const devices = state.devices.map(d => d.id === action.id ? { ...d, ...action.patch } : d)
       return { ...state, devices }
     }
+    case 'DEV_DELETE': {
+      const devices = state.devices.filter(d => d.id !== action.id)
+      return { ...state, devices }
+    }
 
     // Database targets
-    case 'DB_ADD_TARGET':
-      return { ...state, dbTargets: [...state.dbTargets, action.target] }
+    case 'DB_ADD_TARGET': {
+      // Upsert to avoid duplicates
+      const idx = state.dbTargets.findIndex(t => t.id === action.target.id)
+      const dbTargets = idx >= 0
+        ? state.dbTargets.map((t,i) => i===idx ? { ...t, ...action.target } : t)
+        : [...state.dbTargets, action.target]
+      return { ...state, dbTargets }
+    }
+    case 'DB_SET_ALL': {
+      // Replace list, de-duplicated by id
+      const seen = new Set()
+      const dbTargets = []
+      for (const t of (action.items||[])) {
+        if (!t || !t.id || seen.has(t.id)) continue
+        seen.add(t.id); dbTargets.push(t)
+      }
+      return { ...state, dbTargets }
+    }
     case 'DB_UPDATE_TARGET': {
       const dbTargets = state.dbTargets.map(t => t.id === action.id ? { ...t, ...action.patch } : t)
+      return { ...state, dbTargets }
+    }
+    case 'DB_MARK_TESTING': {
+      const dbTargets = state.dbTargets.map(t => t.id === action.id ? { ...t, status: 'testing' } : t)
+      return { ...state, dbTargets }
+    }
+    case 'DB_DELETE_TARGET': {
+      const dbTargets = state.dbTargets.filter(t => t.id !== action.id)
       return { ...state, dbTargets }
     }
     case 'DB_SET_DEFAULT':
       return { ...state, defaultDbTargetId: action.id }
 
-    // Schemas
+  // Schemas
+    case 'SCH_SET_ALL': {
+      // Replace list with de-duplicated by id
+      const seen = new Set()
+      const items = []
+      for (const s of (action.items||[])) {
+        if (!s || !s.id || seen.has(s.id)) continue
+        seen.add(s.id)
+        items.push(s)
+      }
+      return { ...state, schemas: items }
+    }
     case 'SCH_ADD':
       return { ...state, schemas: [...state.schemas, action.schema] }
     case 'SCH_UPDATE': {
@@ -68,7 +152,18 @@ function reducer(state, action) {
       return { ...state, schemas }
     }
 
-    // Device tables
+  // Device tables
+    case 'TBL_SET_ALL': {
+      // Replace entire table list with normalized items
+      const seen = new Set()
+      const items = []
+      for (const t of (action.items||[])) {
+        if (!t || !t.id || seen.has(t.id)) continue
+        seen.add(t.id)
+        items.push(t)
+      }
+      return { ...state, tables: items }
+    }
     case 'TBL_ADD_BULK':
       return { ...state, tables: [...state.tables, ...action.tables] }
     case 'TBL_UPDATE': {
@@ -91,6 +186,15 @@ function reducer(state, action) {
     }
 
     // Jobs & Scheduler
+    case 'JOB_SET_ALL': {
+      const seen = new Set()
+      const items = []
+      for (const j of (action.items||[])) {
+        if (!j || !j.id || seen.has(j.id)) continue
+        seen.add(j.id); items.push(j)
+      }
+      return { ...state, jobs: items }
+    }
     case 'JOB_ADD':
       return { ...state, jobs: [...state.jobs, action.job] }
     case 'JOB_UPDATE': {

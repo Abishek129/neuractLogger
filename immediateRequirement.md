@@ -1,239 +1,212 @@
-love it. here’s a **clean, operator-first UX** for your third tab: **Logging & Scheduler** — same left-rail 1:4 layout, high clarity, zero surprises. (UI/UX + functionality only; no code, no structure, no URLs.)
+# ImmediateRequirements.md
 
-# Logging & Scheduler — UX & functionality
-
-## Layout & navigation (same 1:4 rhythm)
-
-- **Left rail (1/4 width)**
-
-  1. **Jobs** (create, monitor, control)
-  2. **Alarms** (define, arm, acknowledge)
-  3. **Buffers & Health** (queues, store-and-forward, system budget)
-  4. **History & Reports** (runs, errors, summaries)
-  5. **Utilities** (import/export, templates, validation)
-
-- **Main area (3/4 width)** shows the active section’s editor, inspector, or dashboard.
-- **Sticky gate banner** (bottom-right): “Ready to run” checks: ≥1 **mapped** table selected in a job, job **Enabled**, and a **Default DB** is OK.
+**Purpose**
+Tell the Codex agent exactly what’s working, what isn’t, and what to fix **first**. The full raw logs will be in `console.md`. This doc is the ground truth summary and acceptance criteria.
 
 ---
 
-## 1) Jobs
+## TL;DR
 
-### Jobs list (left rail shortcut + main table)
+- The **Windows service** (`PLCLoggerSvc` via WinSW) starts and **/health** is OK on **`http://127.0.0.1:5175`**.
+- The **API is reachable** and the lockfile is present at **`C:\ProgramData\PLCLogger\agent\agent.lock.json`** (contains `pid`, `port`, `token`).
+- Two feature endpoints are **not functional** because the packaged EXE is missing runtime modules:
 
-- Columns: **Name**, **Type** (Continuous | Triggered), **Scope** (tables/columns count), **Interval / Trigger**, **Batching**, **CPU budget**, **Status** (Running/Paused/Stopped/Degraded), **Next run**, **Last run**, **Errors** (last 1h).
-- Row actions: **Start**, **Pause**, **Stop**, **Dry-Run 60s**, **Backfill once**, **Duplicate**, **Edit**, **Delete**.
-- Bulk: start/stop/pause multiple jobs, export selected.
+  - `POST /networking/ping` → returns `PING_ICMP_BLOCKED` with message `No module named 'icmplib'`.
+  - `POST /networking/opcua/test` → returns `OPCUA_PKG_MISSING`.
 
-### Create / Edit Job (wizard; compact, no tabs)
-
-**Step 1 — Mode & purpose**
-
-- **Type**: Continuous or Triggered.
-- Short explainer:
-
-  - _Continuous_: sample on a fixed interval.
-  - _Triggered_: watch a condition (bit flip, threshold, change with deadband, edge) → when true, log a full row (or selected columns).
-
-**Step 2 — Scope (what to log)**
-
-- **Table picker**: lists **mapped** tables only; filter by parent schema, name pattern, status.
-- **Column selector**: default = “All mapped columns” with quick exclude/include; search by name/unit/type.
-- Option: “Include only columns with per-column poll rates” (for specialized jobs).
-
-**Step 3 — Read policy (how to read)**
-
-- **Interval** (continuous): set in ms/sec/min; show safe range hint based on table size.
-- **Subscriptions toggle** (where supported): prefer event/monitored-item reads; fallback to polling.
-- **Per-column poll overrides**: show how many selected columns have custom `poll ms`; option to honor/ignore them.
-- **Timeouts & retries**: sensible defaults; brief tooltip guidance.
-- **Read grouping**: combine addresses where possible; auto-range packing (register-based).
-- **Jitter control**: stagger table starts to avoid burst writes.
-
-**Step 4 — Trigger logic (if Triggered)**
-
-- **Trigger source**: pick **device + table + field** (from mapping).
-- **Operators**:
-
-  - _Change (deadband)_ → log when |Δ| ≥ deadband (unit-aware).
-  - _Rising edge_ / _Falling edge_.
-  - _Threshold_: `>`, `>=`, `<`, `<=`, `==`, `!=`.
-  - _Windowed peak_ (detect local maxima/minima within a time/window length).
-  - _Rate-of-change_ (derivative exceeds threshold).
-
-- **Condition builder**: AND/OR groups across multiple fields; parentheses supported.
-- **Hysteresis & hold-off**: prevent flapping; e.g., “remain true for 2s before firing”, “cool-down 10s”.
-- **Action**: what to log when true → “Full row” or “Selected columns only”.
-
-**Step 5 — Write policy (how to write)**
-
-- **Target**: shows Default DB (override allowed if multiple targets exist).
-- **Batching**: by count and/or by time (e.g., insert every N samples or every T ms).
-- **Retention hint**: show current retention (if configured elsewhere); non-blocking.
-- **Store-and-forward**: toggle to buffer on disk when DB is offline; shows max size and current usage.
-- **Ordering**: guarantee monotonic `timestamp_utc`; discard late/duplicate option.
-
-**Step 6 — Runtime & scheduling**
-
-- **Start behavior**: start on save, start on app launch, or manual.
-- **Schedule windows** (optional): run only during selected hours/days; skip/flush behavior outside windows.
-- **CPU budget**:
-
-  - Simple **slider**: _Eco_ ↔ _Balanced_ ↔ _Performance_.
-  - Advanced **limits**: max parallel device reads, max parallel table jobs, max DB write workers.
-  - **Estimator** panel: shows predicted read/write rate and CPU/I/O cost, warns if over-committed.
-
-**Step 7 — Preview & validate**
-
-- **Dry-Run 60s**: reads & simulates writes without persisting; shows throughput, p50/p95 latency, error %, queue depth.
-- **Validation checklist**: unmapped fields, offline devices, illegal poll rates, write permissions, time skew.
-- **Save** only when all critical checks pass (non-critical warnings allowed with acknowledge).
-
-### Job inspector (main area when a job is selected)
-
-- **Header**: job name, status chip (with reason if Degraded).
-- **Live tiles**:
-
-  - **Read rate** (values/s), **Write throughput** (rows/s), **Queue depth**, **Error %**, **p50/p95 latencies** (read & write).
-  - Small **heatmap** by table for lag/errors.
-
-- **Controls**: Start, Pause, Stop, Dry-Run, Backfill once (snapshot read now), Flush buffer.
-- **Recent events**: chronological log (started, paused, condition fired, backpressure, reconnects).
-- **Scope summary**: which tables/columns are in scope, with a quick link to mapping if something’s invalid.
-
-### Collision & priority (when multiple jobs touch the same target)
-
-- **Policy chooser** per table:
-
-  - “Last writer wins”,
-  - “Serialize jobs” (queue by priority),
-  - “Skip if already written in last X ms”.
-
-- **Job priority**: low/normal/high. Display conflict warnings inline.
+- Earlier attempts to run the service with venv Python failed due to pointing Python at the **repo folder** (which has **no `__main__`**), not at the **actual entry module/script**. That’s why you saw repeated `python.exe: can't find '__main__' module` in the service logs.
+- Front-end dev server (Vite) previously had 404/entry-resolution warnings; those are secondary now. **Priority is fixing backend packaging/runtime so the API endpoints work.**
 
 ---
 
-## 2) Alarms
+## Environment (for context)
 
-### Alarms list
-
-- Columns: **Name**, **Severity** (Info/Warning/Alarm/Critical), **Scope** (table/fields), **Condition**, **Action** (log only | log+notify), **Status** (Armed/Disarmed), **Active now**, **Last fired**.
-- Row actions: **Arm/Disarm**, **Acknowledge**, **Edit**, **Duplicate**, **Delete**.
-
-### Create / Edit Alarm (builder)
-
-**Definition**
-
-- **Name** & **Severity** color.
-- **Scope**: choose mapped table(s); select one or more **fields** as operands.
-- **Condition types** (same palette as Triggered jobs, plus alarm-specifics):
-
-  - Threshold, change with deadband, rising/falling edge, windowed peak, rate-of-change.
-  - **Compound expressions** (AND/OR groups).
-
-- **Hysteresis**: on-delay, off-delay; **Latch** (remains active until acknowledged, even if condition clears).
-- **Dedup window**: ignore repeats within T seconds.
-
-**Actions**
-
-- **Log alarm event** (always available; writes to alarms table with `timestamp_utc`, value, severity, message).
-- **Auto-snapshot**: optional one-time full-row capture when alarm fires.
-- **Notify** (local): in-app banner, system toast.
-- **Escalation** (optional): if not acknowledged within T, raise severity or trigger a secondary action.
-
-**Run behavior**
-
-- **Armed/Disarmed** toggle.
-- **Maintenance mode** (suppress actions but keep counters).
-- **Test fire** button to verify UX and downstream logging.
-
-### Alarm monitor (main area)
-
-- **Active alarms** panel (sticky): count by severity; quick **Acknowledge All** (confirm).
-- **Timeline** of events with filters (severity, table, field, acknowledged/unacknowledged).
-- **Details drawer**: shows condition, last N values around the event, who acknowledged, any notes.
-- **Flap detector**: marks alarms that bounced frequently; suggests increasing hysteresis.
+- OS: Windows 11 (elevated PowerShell used).
+- Service wrapper: **WinSW** (PLCLoggerSvc.exe).
+- Agent lockfile: **`C:\ProgramData\PLCLogger\agent\agent.lock.json`**.
+- Service logs: `C:\Program Files\PLCLogger\agent\PLCLoggerSvc.out.log` and `.err.log`.
+- Agent app logs: `C:\ProgramData\PLCLogger\agent\logs\agent.log`.
+- Dev UI (when used): Vite on **5173**.
+- Agent: FastAPI/Uvicorn on **5175** (pinned / stable in our runs).
 
 ---
 
-## 3) Buffers & Health
+## What **works now**
 
-### Buffers
+1. **Service starts and binds the port**
 
-- **Store-and-forward** meter: used vs. limit, estimated time to saturation at current rate.
-- **Per-job queues**: bars for backlog; click to see last write error.
-- **Eviction policy** (read-only hint): how the system drops or prioritizes when full.
+   - Port **5175** shows as **LISTENING**.
+   - `/health` returns:
 
-### System health
+     ```
+     status: ok
+     agent: plc-agent
+     version: 0.1.0
+     ```
 
-- **Device connectivity**: green/amber/red by device, with reconnect counters.
-- **Database health**: write success %, server time skew badge, last failure reason.
-- **CPU & I/O budget**: gauges vs. set limits; quick nudge to lower/raise.
-- **Safe shutdown**: “Drain and stop all jobs” button with progress.
+2. **Auth & lockfile flow**
 
----
+   - Lockfile is created at **`C:\ProgramData\PLCLogger\agent\agent.lock.json`**.
+   - Reads `port` and `token` successfully.
+   - Unauthorized requests to protected routes return proper 401 (when tested without token).
 
-## 4) History & Reports
+3. **Base API routes**
 
-- **Runs**: per-job run history (start/stop times, duration, totals logged, average latencies, errors).
-- **Failures**: top error types with counts; link to the exact job/table.
-- **Throughput summary**: day/hour charts (values/s, rows/s).
-- **Alarm summary**: counts by severity, mean time to acknowledge, top noisy signals.
-
----
-
-## 5) Utilities
-
-- **Import/Export**: jobs, alarms, or entire logging configuration bundle.
-- **Templates**: save a job/alarms as reusable templates (e.g., “1 Hz baseline”, “Voltage peak catcher”).
-- **Validation center**: one-click audit for: unmapped fields, offline devices, DB offline, illegal intervals, overlapping jobs, missing permissions.
+   - `/health` is responsive.
+   - `/devices` with headers returns a valid (empty) payload.
 
 ---
 
-## Micro-interactions & safeguards
+## What’s **not** working
 
-- **Live “What will happen” chips**: as you adjust interval/batching, a chip updates predicted rows/sec and storage/day.
-- **Inline warnings**: “Selected interval may exceed device capability” (based on recent latency), “Per-column poll overrides will increase load by \~X%”.
-- **Acknowledge notes**: when acknowledging an alarm, prompt for a short note (optional).
-- **Keyboard**: start/stop job via shortcut, quick search in lists with `/`.
-- **Accessibility**: severity always paired with a word, not just color.
+1. **Networking ping endpoint**
 
----
+   - `POST /networking/ping` responds with:
 
-## Acceptance checks (for this tab)
+     - `ok: false`
+     - `code: PING_ICMP_BLOCKED`
+     - `message: No module named 'icmplib'`
 
-1. **Job creation**
+   - This is **not** a firewall/permission issue—it’s a **packaging** issue (module missing inside the EXE).
 
-   - Continuous job: selects mapped tables, sets interval, batching, CPU budget; passes validation; Dry-Run shows non-zero throughput; Start → status Running.
-   - Triggered job: defines condition with deadband or edge; fires during test; logs full rows or selected columns as configured.
+2. **OPC UA probe endpoint**
 
-2. **Controls**
+   - `POST /networking/opcua/test` responds with:
 
-   - Start/Pause/Stop work instantly and reflect in metrics; Backfill once captures a snapshot row.
-   - Collision policy prevents double-writes or coordinates jobs deterministically.
+     - `ok: false`
+     - `protocol: opcua`
+     - `message: OPCUA_PKG_MISSING`
 
-3. **Alarms**
+   - Again a **packaging** problem (the `opcua` module isn’t in the EXE).
 
-   - Define an alarm with hysteresis and latch; arm it; when condition met, an event is logged and visible; acknowledge clears active state; timeline records it.
+3. **Earlier service run via venv Python**
 
-4. **Resilience**
+   - Attempts to run WinSW with `python.exe` pointing at the repo root failed:
 
-   - If device goes offline → job shows **Degraded**, buffers accumulate (if enabled), auto-reconnect succeeds later, buffered data flushes.
-   - If DB goes offline → buffers grow to limit, warning appears; on recovery, backlog drains; no UI freezes.
+     - Repeated `python.exe: can't find '__main__' module in 'D:\Apps\plc_logger_app\plc_logger'`.
 
-5. **Health & history**
+   - Root cause: no entry; you must target the **actual entry module/script** that runs the agent (e.g., `python -m <package.path.to.main>` or a specific `main.py`).
 
-   - Buffers & Health shows realistic queue depths and time-to-full; History lists runs and errors with correct counts.
+4. **Front-end**
 
----
-
-## Small, high-impact additions
-
-- **Quiet hours**: suppress alarms (or demote to log-only) during defined windows.
-- **Per-table throttles**: minimum separation between writes for the same table to reduce churn.
-- **Derived fields (preview-only)**: simple expressions (e.g., phase average) for triggers/alarms without altering schemas.
-- **Capacity guardrails**: soft caps prevent setting intervals below a safe minimum given current CPU budget.
+   - Previously saw Vite warnings and occasional 404 at `/`. These are **secondary** and should be re-checked **after** the agent’s feature endpoints are fixed. (Front-end will still struggle if those endpoints fail.)
 
 ---
 
-This gives you a **coherent, testable** Logging & Scheduler UX: create jobs with confidence, watch them in real time, handle backpressure safely, and get actionable alarms without noise. Tell me what you want emphasized or simplified, and I’ll refine—and I’ll stick to UI/UX + functionality only.
+## Evidence (see `console.md`)
+
+- Lockfile shows **pid** and **port 5175**.
+- `Get-NetTCPConnection` shows **127.0.0.1:5175 Listen**.
+- `/health` returns OK.
+- `POST /networking/ping` → `No module named 'icmplib'`.
+- `POST /networking/opcua/test` → `OPCUA_PKG_MISSING`.
+- WinSW logs contain prior `python.exe: can't find '__main__' module` messages when misconfigured.
+
+---
+
+## Likely root causes
+
+1. **PyInstaller packaging omitted optional imports**
+
+   - `icmplib` and `opcua` are imported conditionally in code; PyInstaller won’t include them unless told to (hidden imports).
+
+2. **Wrong service entry when attempting venv-run**
+
+   - WinSW XML pointed `python.exe` to the repo path, not to the real **entry module/script** that starts Uvicorn.
+
+---
+
+## Non-issues (already clarified)
+
+- **Ports are stable** (5175 agent, 5173 Vite).
+- **CORS** has not been identified as the cause of the current backend failures.
+- **Auth** works; 401 is expected without token. With token, endpoints respond (and reveal the missing-module errors).
+
+---
+
+## Immediate requirements (Dev first, then Production)
+
+### A) Development (get feature endpoints working locally)
+
+1. **Confirm the agent entry module/script**
+
+   - Identify the **exact** Python entry that launches Uvicorn (e.g., `plc_agent/api/main.py` or `apps/agent/__main__.py`).
+   - Document it (Codex must use it consistently).
+
+2. **Run agent from venv to validate imports**
+
+   - Ensure venv has: `icmplib`, `opcua`, `apscheduler`, `cryptography`.
+   - Start the agent **from venv** using the correct entry and `--port 5175`.
+   - Verify:
+
+     - `/health` → OK
+     - `POST /networking/ping` → result without “No module named 'icmplib'”
+
+       - Note: If ICMP is blocked by OS/policy, expect a different error (timeout/permission), **not** a missing-module message.
+
+     - `POST /networking/opcua/test` → result without `OPCUA_PKG_MISSING`
+
+       - With no OPC UA server running, a timeout or connection error is acceptable.
+
+3. **Front-end quick sanity (once 2 passes)**
+
+   - Point the UI dev server at `http://127.0.0.1:5175`.
+   - Ensure the UI can read the lockfile token (from **ProgramData**) and make successful authorized calls to the above two endpoints.
+   - Watch `agent.log` while exercising the UI to confirm calls arrive.
+
+### B) Production (package and deploy)
+
+1. **PyInstaller rebuild with hidden imports**
+
+   - Include at minimum:
+
+     - `icmplib`
+     - `opcua`, `opcua.ua`, `opcua.common`, `opcua.crypto`
+     - (and keep existing `apscheduler` hidden imports if present)
+
+   - Build the EXE using the **real agent entry**.
+
+2. **Deploy updated EXE**
+
+   - Copy to `C:\Program Files\PLCLogger\agent\plclogger-agent.exe`
+   - Ensure WinSW XML:
+
+     - Uses the **EXE** (or venv python + actual entry, if you choose that route).
+     - Exposes `ProgramData` env var so lockfile/logs are under `C:\ProgramData\PLCLogger\agent\...`.
+     - Start mode = Automatic; onfailure restart.
+
+3. **Service restart and validation**
+
+   - Restart `PLCLoggerSvc`.
+   - Validate:
+
+     - Lockfile present and fresh.
+     - Port 5175 listening.
+     - `/health` OK.
+     - `POST /networking/ping` has **no** “No module named 'icmplib'”.
+     - `POST /networking/opcua/test` has **no** `OPCUA_PKG_MISSING`.
+
+---
+
+## Constraints & notes
+
+- ICMP on Windows may require admin privileges or can be blocked by policy; success criteria here is **absence of the missing-module error**, not necessarily a successful ping reply from the OS/network.
+- OPC UA test without a real server at `opc.tcp://127.0.0.1:4840` will likely **timeout**—that’s acceptable. The key is **module present** and **call handled**.
+- Keep the **lockfile** authoritative source for `port` and `token`.
+- Ensure the **UI reads lockfile from ProgramData**; do **not** require copying the lockfile to `Program Files`.
+
+---
+
+## Definition of Done
+
+- **Dev**: Running from venv, both endpoints respond **without** missing-module errors. UI dev server can add a device and perform network tests successfully; related calls appear in `agent.log`.
+- **Prod**: Service starts from the packaged EXE; `/health` OK; both endpoints return no missing-module errors; UI talks to the service without manual lockfile copying; logs clean of `No module named 'icmplib'` and `OPCUA_PKG_MISSING`.
+
+---
+
+## Deliverables for this pass
+
+1. The **confirmed entry module/script** for the agent.
+2. A **working dev run** (venv) demonstrating both endpoints without missing-module errors.
+3. A **rebuilt EXE** with the required hidden imports and a short note of the exact PyInstaller command/spec used.
+4. A short verification note with the four checks: `/health`, `ping`, `opcua/test`, and a UI action hitting the API (with timestamps that match `agent.log`).
