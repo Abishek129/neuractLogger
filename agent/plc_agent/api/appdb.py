@@ -7,20 +7,38 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 def _app_folder() -> Path:
-    # Prefer explicit override; else ProgramData for production; else repo root; fallback to CWD
+    """Return a writable folder for the agent app data."""
     override = os.environ.get("APP_DB_DIR")
     if override:
         folder = Path(override)
     else:
+        candidates = []
         pd = os.environ.get("ProgramData")
         if pd:
-            folder = Path(pd) / "PLCLogger" / "agent"
-        else:
+            for brand in ("NeuractLogger", "PLCLogger"):
+                candidates.append(Path(pd) / brand / "agent")
+        ld = os.environ.get("LOCALAPPDATA")
+        if ld:
+            for brand in ("NeuractLogger", "PLCLogger"):
+                candidates.append(Path(ld) / brand / "agent")
+        try:
+            candidates.append(Path(__file__).resolve().parents[3])
+        except Exception:
+            candidates.append(Path(os.getcwd()))
+        folder = None
+        last_error: Exception | None = None
+        for cand in candidates:
             try:
-                # repo root: agent/plc_agent/api/appdb.py -> up 3 levels
-                folder = Path(__file__).resolve().parents[3]
-            except Exception:
-                folder = Path(os.getcwd())
+                cand.mkdir(parents=True, exist_ok=True)
+                folder = cand
+                break
+            except PermissionError as e:
+                last_error = e
+                continue
+        if folder is None:
+            if last_error:
+                raise last_error
+            folder = Path(os.getcwd())
     folder.mkdir(parents=True, exist_ok=True)
     return folder
 
@@ -909,3 +927,6 @@ def load_job_runs(job_id: str, frm: Optional[str] = None, to: Optional[str] = No
     with _conn() as c:
         rs = c.execute(sql, tuple(params)).fetchall()
         return [dict(r) for r in rs]
+
+
+

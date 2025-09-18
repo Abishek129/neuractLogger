@@ -17,14 +17,14 @@ Pop-Location
 
 Write-Host "==> Optional: Building unified MSI via WiX"
 if (Get-Command wix.exe -ErrorAction SilentlyContinue) {
-  $agentDir = Join-Path "$PSScriptRoot\.." 'dist\plclogger-agent'
+  $agentDir = Join-Path "$PSScriptRoot\.." 'dist\NeuractLogger-agent'
   # Attempt to find Tauri App folder containing the UI exe
   $bundleRoot = Join-Path "$PSScriptRoot\..\apps\desktop\src-tauri\target\release\bundle" '.'
-  $uiExe = Get-ChildItem -Path $bundleRoot -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'PLC Logger.exe' } | Select-Object -First 1
+  $uiExe = Get-ChildItem -Path $bundleRoot -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'Neuract Logger.exe' } | Select-Object -First 1
   if ($uiExe) {
     $uiDir = $uiExe.DirectoryName
     Write-Host "WiX: Using UI dir: $uiDir"
-    & powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\build_wix.ps1" -AgentDir $agentDir -UiDir $uiDir -Out (Join-Path "$PSScriptRoot\..\installer" 'PLCLogger.msi')
+    & powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\build_wix.ps1" -AgentDir $agentDir -UiDir $uiDir -Out (Join-Path "$PSScriptRoot\..\installer" 'NeuractLogger.msi')
   } else {
     Write-Warning 'UI exe not found under bundle/. Skipping unified MSI. Build Tauri first.'
   }
@@ -42,3 +42,4 @@ if (Get-Command makensis.exe -ErrorAction SilentlyContinue) {
 }
 
 Write-Host "Build pipeline complete. See dist/ and installer/."
+

@@ -1,7 +1,7 @@
-﻿param(
-  [string]$AgentDir = 'dist\plclogger-agent',
+param(
+  [string]$AgentDir = 'dist\NeuractLogger-agent',
   [string]$UiDir = '',
-  [string]$Out = 'installer\PLCLogger.msi'
+  [string]$Out = 'installer\NeuractLogger.msi'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,12 +86,12 @@ if ($UiDir -and (Test-Path $UiDir)) {
 $main = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="PLC Logger" Manufacturer="PLCLogger" Version="0.1.0" Language="1033" UpgradeCode="{E4D7E1C0-DEAD-BEEF-C0DE-1234567890AB}">
+  <Product Id="*" Name="Neuract Logger" Manufacturer="NeuractLogger" Version="0.1.0" Language="1033" UpgradeCode="{E4D7E1C0-DEAD-BEEF-C0DE-1234567890AB}">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
     <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
     <MediaTemplate />
 
-    <Feature Id="MainFeature" Title="PLC Logger" Level="1">
+    <Feature Id="MainFeature" Title="Neuract Logger" Level="1">
       <ComponentGroupRef Id="AgentGroup" />
       <ComponentGroupRef Id="UiGroup" />
       <ComponentGroupRef Id="ExtrasGroup" />
@@ -101,20 +101,20 @@ $main = @"
   <Fragment>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLDIR" Name="PLCLogger">
+        <Directory Id="INSTALLDIR" Name="NeuractLogger">
           <Directory Id="AGENTDIR" Name="agent" />
           <Directory Id="UIDIR" Name="ui" />
         </Directory>
       </Directory>
 
       <Directory Id="ProgramMenuFolder">
-        <Directory Id="AppProgramMenuDir" Name="PLC Logger" />
+        <Directory Id="AppProgramMenuDir" Name="Neuract Logger" />
       </Directory>
 
       <Directory Id="DesktopFolder" />
 
       <Directory Id="CommonAppDataFolder">
-        <Directory Id="PD_ROOT"  Name="PLCLogger">
+        <Directory Id="PD_ROOT"  Name="NeuractLogger">
           <Directory Id="PD_AGENT" Name="agent">
             <Directory Id="PD_LOGS" Name="logs" />
           </Directory>
@@ -135,19 +135,19 @@ if ($uiExeName) {
     <ComponentGroup Id="ExtrasGroup">
       <Component Id="CreateDataDirs" Guid="{D22A0A6B-6A8F-4D2D-A2B1-9BF7D9B7F001}" Directory="PD_LOGS">
         <CreateFolder />
-        <RegistryValue Root="HKLM" Key="Software\PLCLogger" Name="PD_LOGS" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\NeuractLogger" Name="PD_LOGS" Type="integer" Value="1" KeyPath="yes" />
       </Component>
 
       <Component Id="UiStartMenuShortcut" Guid="{D22A0A6B-6A8F-4D2D-A2B1-9BF7D9B7F002}" Directory="AppProgramMenuDir">
-        <Shortcut Id="StartMenuShortcut" Name="PLC Logger" Target="[UIDIR]$uiExeName" WorkingDirectory="UIDIR" />
-        <RemoveFile Id="RmStartMenuShortcut" On="uninstall" Name="PLC Logger.lnk" />
-        <RegistryValue Root="HKLM" Key="Software\PLCLogger" Name="SM_Shortcut" Type="integer" Value="1" KeyPath="yes" />
+        <Shortcut Id="StartMenuShortcut" Name="Neuract Logger" Target="[UIDIR]$uiExeName" WorkingDirectory="UIDIR" />
+        <RemoveFile Id="RmStartMenuShortcut" On="uninstall" Name="Neuract Logger.lnk" />
+        <RegistryValue Root="HKLM" Key="Software\NeuractLogger" Name="SM_Shortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
 
       <Component Id="UiDesktopShortcut" Guid="{D22A0A6B-6A8F-4D2D-A2B1-9BF7D9B7F003}" Directory="DesktopFolder">
-        <Shortcut Id="DesktopShortcut" Name="PLC Logger" Target="[UIDIR]$uiExeName" WorkingDirectory="UIDIR" />
-        <RemoveFile Id="RmDesktopShortcut" On="uninstall" Name="PLC Logger.lnk" />
-        <RegistryValue Root="HKLM" Key="Software\PLCLogger" Name="Desk_Shortcut" Type="integer" Value="1" KeyPath="yes" />
+        <Shortcut Id="DesktopShortcut" Name="Neuract Logger" Target="[UIDIR]$uiExeName" WorkingDirectory="UIDIR" />
+        <RemoveFile Id="RmDesktopShortcut" On="uninstall" Name="Neuract Logger.lnk" />
+        <RegistryValue Root="HKLM" Key="Software\NeuractLogger" Name="Desk_Shortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </ComponentGroup>
   </Fragment>
@@ -161,7 +161,7 @@ if ($uiExeName) {
     <ComponentGroup Id="ExtrasGroup">
       <Component Id="CreateDataDirs" Guid="{D22A0A6B-6A8F-4D2D-A2B1-9BF7D9B7F001}" Directory="PD_LOGS">
         <CreateFolder />
-        <RegistryValue Root="HKLM" Key="Software\PLCLogger" Name="PD_LOGS" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\NeuractLogger" Name="PD_LOGS" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </ComponentGroup>
   </Fragment>
@@ -187,9 +187,9 @@ if (Test-Path $agentWxsPath) {
       if (-not $hasInstall) {
         $svcInstall = $x.CreateElement('ServiceInstall', $nsUri)
         $svcInstall.SetAttribute('Id', 'AgentServiceInstall')
-        $svcInstall.SetAttribute('Name', 'PLCLoggerAgent')
-        $svcInstall.SetAttribute('DisplayName', 'PLC Logger Agent')
-        $svcInstall.SetAttribute('Description', 'Runs the PLC Logger Agent API and background jobs as a Windows service.')
+        $svcInstall.SetAttribute('Name', 'NeuractLoggerAgent')
+        $svcInstall.SetAttribute('DisplayName', 'Neuract Logger Agent')
+        $svcInstall.SetAttribute('Description', 'Runs the Neuract Logger Agent API and background jobs as a Windows service.')
         $svcInstall.SetAttribute('Start', 'auto')
         $svcInstall.SetAttribute('Type', 'ownProcess')
         $svcInstall.SetAttribute('ErrorControl', 'normal')
@@ -199,7 +199,7 @@ if (Test-Path $agentWxsPath) {
       if (-not $hasControl) {
         $svcCtrl = $x.CreateElement('ServiceControl', $nsUri)
         $svcCtrl.SetAttribute('Id', 'AgentServiceControl')
-        $svcCtrl.SetAttribute('Name', 'PLCLoggerAgent')
+        $svcCtrl.SetAttribute('Name', 'NeuractLoggerAgent')
         $svcCtrl.SetAttribute('Start', 'install')
         $svcCtrl.SetAttribute('Stop', 'both')
         $svcCtrl.SetAttribute('Remove', 'uninstall')
@@ -235,4 +235,5 @@ foreach ($w in $wxss) {
 & $light -out $Out $objs
 if ($LASTEXITCODE -ne 0) { throw "WiX light failed with code $LASTEXITCODE" }
 
-Write-Host "✅ MSI built at $Out"
+Write-Host "? MSI built at $Out"
+

@@ -23,6 +23,7 @@ export async function createDevice(params) { return request('/devices', { method
 export async function connectDevice(id) { return request(`/devices/${id}/connect`, { method: 'POST' }) }
 export async function disconnectDevice(id) { return request(`/devices/${id}/disconnect`, { method: 'POST' }) }
 export async function quickTestDevice(id) { return request(`/devices/${id}/quick_test`, { method: 'POST' }) }
+export async function deleteDevice(id) { return request(`/devices/${id}`, { method: 'DELETE' }) }
 
 // Gateways (reachability)
 export async function listGateways() { return request('/networking/gateways') }
@@ -31,3 +32,4 @@ export async function deleteGateway(id) { return request(`/networking/gateways/$
 export async function updateGateway(id, params) { return request(`/networking/gateways/${id}`, { method: 'PUT', body: params }) }
 export async function pingGateway(id, params) { return request(`/networking/gateways/${id}/ping`, { method: 'POST', body: params || {} }) }
 export async function tcpGateway(id, params) { return request(`/networking/gateways/${id}/tcp`, { method: 'POST', body: params || {} }) }
+

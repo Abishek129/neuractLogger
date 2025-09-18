@@ -23,16 +23,18 @@ function Ensure-Port-Free([int]$p) {
 }
 
 function Try-Stop-AgentService() {
-  try {
-    $svc = sc.exe query PLCLoggerSvc 2>$null | Out-String
-    if ($svc -and $svc -match "STATE") {
-      Write-Host "Stopping PLCLoggerSvc service (if running)..."
-      try { Start-Process sc.exe -Verb runAs -ArgumentList 'stop PLCLoggerSvc' | Out-Null } catch {}
-      Start-Sleep -Seconds 2
-    }
-  } catch {}
+  $serviceNames = @("NeuractLoggerSvc", "NeuractLoggerAgent", "PLCLoggerSvc", "PLCLoggerAgent")
+  foreach ($name in $serviceNames) {
+    try {
+      $svc = sc.exe query $name 2>$null | Out-String
+      if ($svc -and $svc -match "STATE") {
+        Write-Host "Stopping $name service (if running)..."
+        try { Start-Process sc.exe -Verb runAs -ArgumentList "stop $name" | Out-Null } catch {}
+        Start-Sleep -Seconds 2
+      }
+    } catch {}
+  }
 }
-
 function Wait-Port-Free([int]$p, [int]$timeoutSec = 10) {
   $deadline = (Get-Date).AddSeconds($timeoutSec)
   while ((Get-Date) -lt $deadline) {
@@ -59,8 +61,8 @@ $env:AGENT_STRICT_PORT = "1"
 $agent = Start-Process -PassThru -NoNewWindow python -ArgumentList "agent/run_agent.py" -WorkingDirectory "$PSScriptRoot\.."
 
 # Wait for lockfile and read port+token, prefer LocalAppData (dev agent) over ProgramData (service)
-$pdLock   = Join-Path $env:ProgramData   "PLCLogger\agent\agent.lock.json"
-$laLock   = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "PLCLogger\agent\agent.lock.json" } else { $null }
+$pdLock   = Join-Path $env:ProgramData   "NeuractLogger\\agent\agent.lock.json"
+$laLock   = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "NeuractLogger\\agent\agent.lock.json" } else { $null }
 $cwdLock  = Join-Path "$PSScriptRoot\.." "agent.dev.lock.json"
 
 for ($i=0; $i -lt 80; $i++) {
@@ -133,3 +135,5 @@ npm run dev -- --port $UiPort --strictPort
 Pop-Location
 
 if ($agent -ne $null) { try { Stop-Process -Id $agent.Id -Force } catch {} }
+
+

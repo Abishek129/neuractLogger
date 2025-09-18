@@ -13,16 +13,22 @@ router = APIRouter(prefix="/mappings")
 log = logging.getLogger(__name__)
 
 
+def _resolve_table(table_id: str, *, db_target_override: Optional[str] = None) -> Dict[str, Any]:
+    table = Store.instance().get_table(table_id)
+    if table:
+        return table
+    if table_id.startswith("phy_"):
+        logical = table_id[4:]
+        target = db_target_override or Store.instance().get_default_db_target()
+        if not target:
+            raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
+        return {"id": table_id, "name": logical, "dbTargetId": target, "schemaId": None}
+    raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
+
+
 @router.get("/{table_id}")
 def get_mapping(table_id: str) -> Dict[str, Any]:
-    t = Store.instance().get_table(table_id)
-    # Fallback for physically discovered tables (no local catalog entry)
-    if not t:
-        if table_id.startswith("phy_"):
-            name = table_id[4:]
-            t = {"id": table_id, "name": name, "dbTargetId": Store.instance().get_default_db_target()}
-        else:
-            raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
+    t = _resolve_table(table_id)
     loaded = _load_mapping_from_user_db(t)
     try:
         n = len((loaded or {}).get("rows") or {})
@@ -41,9 +47,7 @@ def get_mapping(table_id: str) -> Dict[str, Any]:
 
 @router.post("/{table_id}")
 def upsert_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    t = Store.instance().get_table(table_id)
-    if not t:
-        raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
+    t = _resolve_table(table_id, db_target_override=payload.get("dbTargetId"))
     device_id = payload.get("deviceId")
     rows_patch = payload.get("rows") or {}
     _save_mapping_to_user_db(t, rows_patch, device_id)
@@ -57,9 +61,7 @@ def upsert_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.post("/{table_id}/bulk_apply")
 def bulk_apply(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    t = Store.instance().get_table(table_id)
-    if not t:
-        raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
+    t = _resolve_table(table_id, db_target_override=payload.get("dbTargetId"))
     rows = payload.get("rows") or {}
     _save_mapping_to_user_db(t, rows, payload.get("deviceId"))
     m = Store.instance().upsert_mapping(table_id, rows_patch=rows)
@@ -68,9 +70,7 @@ def bulk_apply(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.post("/{table_id}/import")
 def import_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    t = Store.instance().get_table(table_id)
-    if not t:
-        raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
+    t = _resolve_table(table_id, db_target_override=payload.get("dbTargetId"))
     mapping = payload.get("mapping") or payload
     rows = mapping.get("rows") or {}
     _replace_mapping_in_user_db(t, rows, mapping.get("deviceId") or payload.get("deviceId"))
@@ -83,9 +83,7 @@ def import_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.post("/{table_id}/validate")
 def validate_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    t = Store.instance().get_table(table_id)
-    if not t:
-        raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
+    t = _resolve_table(table_id, db_target_override=payload.get("dbTargetId"))
     m = Store.instance().get_mapping(table_id)
     schema = Store.instance().get_schema(t.get("schemaId")) or {"fields": []}
     required = [f.get("key") for f in (schema.get("fields") or [])]

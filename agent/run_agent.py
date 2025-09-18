@@ -5,10 +5,20 @@ import sys
 from pathlib import Path
 from plc_agent.api.server import run
 
-
 def _choose_port(preferred: int, host: str = "127.0.0.1") -> int:
-    # Try preferred; optionally fail-fast if busy, else fall back to free port
+    """Choose an available port.
+
+    - If preferred == 0, bind to an ephemeral port and return the actual port.
+    - Otherwise, try to bind the preferred port; if busy and not strict, fall back to any free port.
+    """
     strict = os.environ.get("AGENT_STRICT_PORT", "0").lower() not in ("0", "false")
+    # Special-case: 0 should yield a real ephemeral port, not 0
+    if preferred == 0:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, 0))
+            return s.getsockname()[1]
+    # Try preferred
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -18,6 +28,7 @@ def _choose_port(preferred: int, host: str = "127.0.0.1") -> int:
             if strict:
                 print(f"Port {preferred} busy and strict mode enabled", file=sys.stderr)
                 sys.exit(97)
+    # Fallback to any free port
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind((host, 0))
         return s.getsockname()[1]
@@ -26,12 +37,12 @@ def _choose_port(preferred: int, host: str = "127.0.0.1") -> int:
 def _write_lockfile(port: int, token: str) -> None:
     pid = os.getpid()
     data = {"pid": pid, "port": port, "token": token}
-    # Prefer ProgramData (service path), then fall back to user LocalAppData
+    # Prefer ProgramData (Service path), then fall back to user LocalAppData
     wrote_any = False
     # 1) ProgramData
     try:
         base = os.environ.get("ProgramData") or os.getcwd()
-        folder = Path(base) / "PLCLogger" / "agent"
+        folder = Path(base) / "NeuractLogger" / "agent"
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / "agent.lock.json"
         path.write_text(json.dumps(data))
@@ -43,7 +54,7 @@ def _write_lockfile(port: int, token: str) -> None:
     try:
         base_local = os.environ.get("LOCALAPPDATA")
         if base_local:
-            folder = Path(base_local) / "PLCLogger" / "agent"
+            folder = Path(base_local) / "NeuractLogger" / "agent"
             folder.mkdir(parents=True, exist_ok=True)
             path = folder / "agent.lock.json"
             path.write_text(json.dumps(data))
@@ -59,7 +70,6 @@ def _write_lockfile(port: int, token: str) -> None:
             print(f"Lockfile (cwd): {path}")
         except Exception as e:
             print("Lockfile write failed (cwd):", e, file=sys.stderr)
-
 
 def main():
     preferred = int(os.environ.get("AGENT_PORT", "5175"))

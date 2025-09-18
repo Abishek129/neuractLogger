@@ -1,20 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PLC Logger",
-  "identifier": "com.example.plclogger",
+  "productName": "Neuract Logger",
   "version": "0.1.0",
-  "build": {
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist",
-    "devUrl": "http://localhost:5173"
-  },
+  "identifier": "com.neuract.logger",
+  "build": { "frontendDist": "../dist" },
   "app": {
     "windows": [
-      { "title": "PLC Logger", "width": 1280, "height": 800, "visible": true }
+      { "title": "Neuract Logger", "width": 1100, "height": 740, "resizable": true, "devtools": true }
     ],
-    "security": {
-      "csp": null
-    }
-  }
+    "security": { "csp": null }
+  },
+  "bundle": { "active": true, "targets": "nsis" }
 }

@@ -13,12 +13,12 @@ except Exception as e:
     win32serviceutil = None
 
 
-SERVICE_NAME = "PLCLoggerAgent"
-SERVICE_DISPLAY = "PLC Logger Agent"
-SERVICE_DESC = "Runs the PLC Logger Agent API and background jobs as a Windows service."
+SERVICE_NAME = "NeuractLoggerAgent"
+SERVICE_DISPLAY = "Neuract Logger Agent"
+SERVICE_DESC = "Runs the Neuract Logger Agent API and background jobs as a Windows service."
 
 
-class PLCLoggerService(win32serviceutil.ServiceFramework):  # type: ignore[misc]
+class NeuractLoggerService(win32serviceutil.ServiceFramework):  # type: ignore[misc]
     _svc_name_ = SERVICE_NAME
     _svc_display_name_ = SERVICE_DISPLAY
     _svc_description_ = SERVICE_DESC
@@ -57,13 +57,17 @@ class PLCLoggerService(win32serviceutil.ServiceFramework):  # type: ignore[misc]
         except Exception:
             frozen = False
         base_dir = os.path.dirname(sys.executable) if frozen else os.path.dirname(__file__)
-        exe_path = os.path.join(base_dir, "plclogger-agent.exe")
-        if os.path.isfile(exe_path):
+        exe_candidates = [
+            os.path.join(base_dir, "neuract-agent-core.exe"),
+            os.path.join(base_dir, "plclogger-agent.exe"),
+        ]
+        exe_path = next((p for p in exe_candidates if os.path.isfile(p)), None)
+        if exe_path:
             cmd = [exe_path]
         else:
             # Fallback to launching via Python
             cmd = [sys.executable, "-u", os.path.join(base_dir, "run_agent.py")]
-        logdir = os.path.join(os.environ.get("ProgramData", os.getcwd()), "PLCLogger", "agent", "logs")
+        logdir = os.path.join(os.environ.get("ProgramData", os.getcwd()), "NeuractLogger", "agent", "logs")
         try:
             os.makedirs(logdir, exist_ok=True)
         except Exception:
@@ -80,4 +84,7 @@ if __name__ == '__main__':
     if win32serviceutil is None:
         print("pywin32 is required to install/run the Windows service.")
         sys.exit(1)
-    win32serviceutil.HandleCommandLine(PLCLoggerService)  # type: ignore[attr-defined]
+    win32serviceutil.HandleCommandLine(NeuractLoggerService)  # type: ignore[attr-defined]
+
+
+

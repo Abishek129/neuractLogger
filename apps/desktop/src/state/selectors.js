@@ -23,6 +23,7 @@ export const selectUsedByCount = (s, schemaId) => s.tables.filter(t => t.schemaI
 export const selectTableMappingStatus = (s, tableId) => {
   const t = s.tables.find(x => x.id === tableId)
   if (!t) return 'Unmapped'
+  if (t.mappingStatus) return t.mappingStatus
   const sch = s.schemas.find(sc => sc.id === t.schemaId)
   const rows = (s.mappings[tableId]) || {}
   const total = sch?.fields?.length || 0

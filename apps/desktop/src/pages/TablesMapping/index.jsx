@@ -427,8 +427,7 @@ export function TablesMapping({ onProceed }) {
                       <button onClick={()=>migrateSelected([t.id])} disabled={t.status==='migrated'}>Migrate</button>
                       <button
                         onClick={()=>{ setSelTableId(t.id); setMapModalOpen(true) }}
-                        disabled={String(t.id||'').startsWith('phy_')}
-                        title={String(t.id||'').startsWith('phy_') ? 'Mapping requires a cataloged table' : ''}
+                        title={String(t.id||'').startsWith('phy_') ? 'Physical table detected; mapping will be saved directly to the user database.' : ''}
                       >Map</button>
                     </div>
                   </div>
@@ -468,6 +467,11 @@ export function TablesMapping({ onProceed }) {
                     </select>
                     <span className="hint">{schema ? `Schema: ${schema.name}` : ''}</span>
                   </div>
+                  {table && String(table.id).startsWith('phy_') && (
+                    <div className="hint" style={{ color: '#f59e0b', marginBottom: 8 }}>
+                      This table was discovered directly in the destination database. Mappings will be written back to it even though it is not cataloged locally.
+                    </div>
+                  )}
                   <div className="row">
                     <label>Bind device</label>
                     <select value={table?.deviceId || ''} onChange={e=>setDevice(e.target.value)}>

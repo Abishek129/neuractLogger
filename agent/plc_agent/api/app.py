@@ -12,6 +12,7 @@ from .routers import health, schemas, jobs, networking, storage
 from .routers import system as system_router
 from .routers import db_metrics as db_metrics_router
 from .routers import reports as reports_router
+from .routers import debug as debug_router
 from .routers import auth as auth_router
 from .routers import tables as tables_router
 from .routers import mappings as mappings_router
@@ -22,7 +23,7 @@ from ..metrics import metrics as METRICS
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="PLC Logger Agent", version=VERSION)
+    app = FastAPI(title="Neuract Logger Agent", version=VERSION)
     # Minimal logging config (respects UVICORN_LOG where applicable)
     try:
         if not logging.getLogger().handlers:
@@ -31,7 +32,7 @@ def create_app() -> FastAPI:
         # File logs under ProgramData
         try:
             base = os.environ.get("ProgramData") or os.getcwd()
-            log_dir = Path(base) / "PLCLogger" / "agent" / "logs"
+            log_dir = Path(base) / "NeuractLogger" / "agent" / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
             fh = RotatingFileHandler(log_dir / "agent.log", maxBytes=1_000_000, backupCount=5, encoding="utf-8")
             fh.setLevel(getattr(logging, os.environ.get("AGENT_LOG_LEVEL", "INFO").upper(), logging.INFO))
@@ -76,13 +77,18 @@ def create_app() -> FastAPI:
     allow_origins = [
         os.environ.get("CORS_ORIGIN", "http://127.0.0.1:5173"),
         "http://localhost:5173",
+        "http://127.0.0.1:5173",
         "http://127.0.0.1:5175",
         "http://localhost:5175",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "http://localhost:1420",
+        "http://127.0.0.1:1420",
     ]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allow_origins,
-        allow_origin_regex=r"^(app|tauri)://.*$",
+        allow_origin_regex=r"^(https?://tauri\.localhost(:\d+)?|(app|tauri)://.*)$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -101,6 +107,7 @@ def create_app() -> FastAPI:
     app.include_router(system_router.router)
     app.include_router(db_metrics_router.router)
     app.include_router(reports_router.router)
+    app.include_router(debug_router.router)
     # Ensure token exists early
     get_or_create_token()
     # Align DPAPI scope: rekey secrets under current context (machine scope for service)
@@ -144,3 +151,5 @@ def create_app() -> FastAPI:
 
 # Exposed for `uvicorn agent.plc_agent.api.app:app`
 app = create_app()
+
+

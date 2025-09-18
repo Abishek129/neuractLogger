@@ -1,3 +1,4 @@
+﻿import { getBaseUrl } from '../../lib/api/client.js'
 import React, { useMemo, useState, useEffect } from 'react'
 import { useApp } from '../../state/store.jsx'
 import {
@@ -250,13 +251,13 @@ export function LoggingSchedules() {
                     <>
                       <div className="row"><label>Target table</label>
                         <select value={jTables[0]||''} onChange={e=>setJTables(e.target.value? [e.target.value] : [])}>
-                          <option value="">Select table…</option>
+                          <option value="">Select tableâ€¦</option>
                           {tables.filter(t=>selectTableMappingStatus(state,t.id)!=='Unmapped').map(t=>(<option key={t.id} value={t.id}>{t.name}</option>))}
                         </select>
                       </div>
                       <div className="row"><label>Trigger</label>
                         <select value={trField} onChange={e=>setTrField(e.target.value)}>
-                          <option value="">field…</option>
+                          <option value="">fieldâ€¦</option>
                           {(schemas.find(s=>s.id===tables.find(t=>t.id===(jTables[0]||''))?.schemaId)?.fields||[]).map(f => (<option key={f.key} value={f.key}>{f.key}</option>))}
                         </select>
                         <select value={trOp} onChange={e=>setTrOp(e.target.value)}>
@@ -308,8 +309,8 @@ export function LoggingSchedules() {
                     <div>{j.type==='continuous'? (j.intervalMs+'ms') : 'triggered'}</div>
                     <div>{j.batching?.count||1}/{j.batching?.ms||0}ms</div>
                     <div><Dot color={statusColor(j.status)} /> {j.status||'stopped'}</div>
-                    <div>{j.metrics?.nextRun || '—'}</div>
-                    <div>{j.metrics?.lastRun || '—'}</div>
+                    <div>{j.metrics?.nextRun || 'â€”'}</div>
+                    <div>{j.metrics?.lastRun || 'â€”'}</div>
                     <div>{j.metrics?.errors1h ?? 0}</div>
                     <div className="cell act">
                       <button onClick={(e)=>{e.stopPropagation(); startJob(j.id)}}>Start</button>
@@ -400,8 +401,8 @@ export function LoggingSchedules() {
                       {runs.length === 0 && <div className="empty">No runs yet.</div>}
                       {runs.map(r => (
                         <div key={r.id} className="line" style={{ gridTemplateColumns: '1fr 1fr .6fr .6fr .6fr .6fr' }}>
-                          <div>{r.started_at || '—'}</div>
-                          <div>{r.stopped_at || '—'}</div>
+                          <div>{r.started_at || 'â€”'}</div>
+                          <div>{r.stopped_at || 'â€”'}</div>
                           <div>{(r.duration_ms||0)} ms</div>
                           <div>{r.rows||0}</div>
                           <div>{Math.round(r.read_lat_avg||0)} ms</div>
@@ -410,8 +411,8 @@ export function LoggingSchedules() {
                       ))}
                     </div>
                     <div className="row">
-                      <a href={(import.meta.env.VITE_AGENT_BASE_URL || 'http://127.0.0.1:5175') + `/reports/runs.csv?job_id=${encodeURIComponent(selJob.id)}`} target="_blank" rel="noreferrer">Export runs CSV</a>
-                      <a href={(import.meta.env.VITE_AGENT_BASE_URL || 'http://127.0.0.1:5175') + `/reports/errors.csv?job_id=${encodeURIComponent(selJob.id)}`} target="_blank" rel="noreferrer">Export errors CSV</a>
+                      <a href={(getBaseUrl()) + `/reports/runs.csv?job_id=${encodeURIComponent(selJob.id)}`} target="_blank" rel="noreferrer">Export runs CSV</a>
+                      <a href={(getBaseUrl()) + `/reports/errors.csv?job_id=${encodeURIComponent(selJob.id)}`} target="_blank" rel="noreferrer">Export errors CSV</a>
                     </div>
                   </div>
                   <div className="card">
@@ -466,3 +467,4 @@ export function LoggingSchedules() {
     </div>
   )
 }
+

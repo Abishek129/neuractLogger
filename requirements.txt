@@ -1,4 +1,4 @@
-# PLC Logger (Python agent) runtime requirements
+# Neuract Logger (Python agent) runtime requirements
 #
 # Minimal API runtime
 fastapi>=0.111.0
@@ -15,3 +15,4 @@ cryptography>=42.0.0
 # Optional connectors (to be added when implementing)
 # pymodbus
 # opcua
+

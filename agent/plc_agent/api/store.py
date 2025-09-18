@@ -400,6 +400,7 @@ class Store:
             "lastError": None,
             "params": params,
             "autoReconnect": auto_reconnect,
+            "manualDisconnect": False,
         }
         with self._mtx:
             # Prevent duplicate by name (case-insensitive)
@@ -447,7 +448,12 @@ class Store:
             dev["status"] = status
             dev["latencyMs"] = latency_ms
             dev["lastError"] = last_error
-        appdb.update_device_status(dev_id, status=status, latency_ms=latency_ms, last_error=last_error)
+        try:
+            appdb.update_device_status(dev_id, status=status, latency_ms=latency_ms, last_error=last_error)
+        except Exception:
+            self._log.exception(
+                "Failed to persist device status", extra={"device_id": dev_id, "status": status}
+            )
         return self._redact_device(self._devices.get(dev_id))
 
     def _redact_device(self, dev: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -669,6 +675,23 @@ class Store:
                 self._jobs = []
 
     # -------------- Device reconnect loop --------------
+    def test_device_params(self, protocol: str, params: Dict[str, Any]) -> (bool, int, Optional[str]):
+        return self._attempt_connect({"protocol": protocol, "params": params or {}})
+
+    def test_device_connection(self, dev_id: str) -> (bool, int, Optional[str]):
+        with self._mtx:
+            dev = self._devices.get(dev_id)
+            if not dev:
+                return False, 0, "DEVICE_NOT_FOUND"
+            snapshot = dev.copy()
+        return self._attempt_connect(snapshot)
+
+    def mark_manual_disconnect(self, dev_id: str, value: bool) -> None:
+        with self._mtx:
+            dev = self._devices.get(dev_id)
+            if dev:
+                dev["manualDisconnect"] = value
+
     def start_device_reconnector(self) -> None:
         with self._mtx:
             if self._dev_thread_started:
@@ -693,6 +716,8 @@ class Store:
                     if not d.get("autoReconnect", True):
                         continue
                     status = d.get("status") or "disconnected"
+                    if d.get("manualDisconnect"):
+                        continue
                     if status == "connected":
                         # Optionally, could verify health here
                         continue
@@ -706,6 +731,7 @@ class Store:
                         # Connected; reset backoff
                         self._dev_backoff[d["id"]] = {"delay": 1.0, "next": now + 5.0}
                         self.set_device_status(d["id"], status="connected", latency_ms=lat, last_error=None)
+                        d["manualDisconnect"] = False
                     else:
                         # Failure; increase backoff
                         delay = max(1.0, min(30.0, (bid.get("delay", 1.0) * 1.7)))

@@ -1,14 +1,14 @@
 """
 Simple PLC Data Logger Application
 
-This script implements a command‑line application for configuring and running
+This script implements a command???line application for configuring and running
 data logging tasks against programmable logic controllers (PLCs) using a
 generic architecture based on the requirements provided by the user.  The
-application does not talk to real PLCs over Modbus or OPC UA; instead it
+application does not talk to real PLCs over Modbus or OPC??UA; instead it
 uses simulated connectors that generate synthetic values.  The goal is
-to demonstrate the entire workflow – from defining parent schemas and
+to demonstrate the entire workflow ??? from defining parent schemas and
 device tables to mapping columns and starting both continuous and
-trigger‑based logging jobs.
+trigger???based logging jobs.
 
 The core concepts implemented here are:
 
@@ -21,14 +21,14 @@ The core concepts implemented here are:
     logged data into its own physical table inside a SQLite database.
     A `timestamp_utc` column is automatically added to every table.
   * **Mappings** link each column in a device table to a simulated
-    Modbus register or OPC UA node.  The mapping also stores metadata
+    Modbus register or OPC??UA node.  The mapping also stores metadata
     such as data type, scaling factor, deadband and polling period.
   * **Logging jobs** define how and when data should be recorded.  A
     job may run at a fixed interval (continuous logging) or only log
-    when one or more trigger conditions are met (trigger‑based
+    when one or more trigger conditions are met (trigger???based
     logging).
 
-The code uses Python's built‑in `sqlite3` module for data storage and
+The code uses Python's built???in `sqlite3` module for data storage and
 `threading` for asynchronous polling.  Because the environment cannot
 install external packages or talk to real PLCs, all device reads are
 simulated.  You can extend the `SimulatedDeviceConnection` class to
@@ -52,8 +52,8 @@ created tables with the `sqlite3` command if desired.
 This implementation is intentionally minimalist in order to run within
 the constraints of the offline environment.  In a production
 deployment you would likely replace the CLI with a graphical
-front‑end (e.g. React/Tauri) and swap the simulated connector for
-real Modbus/OPC UA drivers.  Nevertheless the structure presented
+front???end (e.g. React/Tauri) and swap the simulated connector for
+real Modbus/OPC??UA drivers.  Nevertheless the structure presented
 here should serve as a blueprint for further development.
 """
 
@@ -80,7 +80,7 @@ class Field:
     Attributes:
         name: Name of the column.
         dtype: Logical data type (e.g. 'float', 'int', 'bool', 'str').
-        unit: Optional engineering unit (e.g. 'A', 'V', '°C').
+        unit: Optional engineering unit (e.g. 'A', 'V', '??C').
         scale: Multiplicative scaling factor applied to raw values.
     """
 
@@ -124,7 +124,7 @@ class Mapping:
     Attributes:
         field_name: Name of the device column being mapped.
         protocol: 'modbus' or 'opc_ua'.  Used for demonstration only.
-        address: The Modbus register or OPC UA node identifier.
+        address: The Modbus register or OPC??UA node identifier.
         data_type: Logical data type expected ('float', 'int', 'bool', 'str').
         scale: Multiplier applied to raw values read from the connector.
         deadband: Minimum change required to log an update (for change triggers).
@@ -166,7 +166,7 @@ class DeviceTable:
 
 @dataclass
 class Trigger:
-    """Represents a trigger condition for trigger‑based logging.
+    """Represents a trigger condition for trigger???based logging.
 
     Attributes:
         field_name: Column to watch.
@@ -244,7 +244,7 @@ class LoggingJob:
         )
 
         while not self._stop_event.is_set():
-            # Determine values for each field (based on per‑field poll periods if provided)
+            # Determine values for each field (based on per???field poll periods if provided)
             now = int(time.time())
             values: Dict[str, Any] = {}
             for field in self.parent_schema.fields:
@@ -253,7 +253,7 @@ class LoggingJob:
                     # Unmapped fields get None
                     values[field.name] = None
                     continue
-                # For continuous jobs we ignore per‑field poll rates and always read
+                # For continuous jobs we ignore per???field poll rates and always read
                 # For trigger jobs we may need to read anyway to evaluate triggers
                 raw_value = conn.read(mapping)
                 # Apply scaling
@@ -346,8 +346,8 @@ class LoggingJob:
 class SimulatedDeviceConnection:
     """Simulates reading values from a device.
 
-    A real implementation would talk to Modbus or OPC UA.  Here we
-    generate pseudo‑random values that drift slowly over time.  Each
+    A real implementation would talk to Modbus or OPC??UA.  Here we
+    generate pseudo???random values that drift slowly over time.  Each
     address has an independent value.
     """
 
@@ -389,7 +389,7 @@ class SimulatedDeviceConnection:
 
 
 class LoggerApp:
-    """Entry point for the interactive command‑line application."""
+    """Entry point for the interactive command???line application."""
 
     def __init__(self) -> None:
         # Keep definitions of parent schemas and devices in memory
@@ -557,7 +557,7 @@ class LoggerApp:
                 poll_str = input("    Poll ms (leave blank to use job interval): ").strip()
                 poll_ms = int(poll_str) if poll_str else None
             except ValueError:
-                print("    Invalid poll ms. Ignoring per‑field poll period.")
+                print("    Invalid poll ms. Ignoring per???field poll period.")
                 poll_ms = None
             device.mappings[field.name] = Mapping(
                 field_name=field.name,
@@ -697,7 +697,7 @@ class LoggerApp:
 
     def run(self) -> None:
         """Enter the main command loop."""
-        print("Welcome to the PLC Logger CLI\n")
+        print("Welcome to the Neuract Logger CLI\n")
         actions = {
             "1": ("Create parent schema", self.create_schema),
             "2": ("List schemas", self.list_schemas),

@@ -1,10 +1,10 @@
 [package]
-name = "plc-logger-tray"
+name = "plc-logger-app"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tauri = { version = "2.4.0", features = ["tray-icon"] }
+tauri = { version = "2.4.0", features = [] }
 tauri-plugin-dialog = { version = "2.4.0" }
 serde_json = "1.0"
 

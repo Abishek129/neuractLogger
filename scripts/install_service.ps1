@@ -1,4 +1,4 @@
-﻿param(
+param(
   [ValidateSet('install','remove','start','stop')]
   [string]$Action = 'install'
 )
@@ -27,7 +27,7 @@ switch ($Action) {
     & python $svcScript install
     & python $svcScript start
     # Configure recovery: restart on failure after 5s, reset counter after 60s
-    & sc.exe failure PLCLoggerAgent reset= 60 actions= restart/5000
+    & sc.exe failure NeuractLoggerAgent reset= 60 actions= restart/5000
     Write-Host 'Service installed and started.'
   }
   'remove' {
@@ -69,9 +69,9 @@ switch ($Action) {
     & python $svcScript install
     & python $svcScript start
     # Ensure start type is Automatic
-    & sc.exe config PLCLoggerAgent start= auto
+    & sc.exe config NeuractLoggerAgent start= auto
     # Configure recovery: restart on failure after 5s, reset counter after 60s
-    & sc.exe failure PLCLoggerAgent reset= 60 actions= restart/5000
+    & sc.exe failure NeuractLoggerAgent reset= 60 actions= restart/5000
     Write-Host 'Service installed and started.'
   }
   'remove' {
@@ -82,3 +82,4 @@ switch ($Action) {
   'start' { & python $svcScript start }
   'stop'  { & python $svcScript stop }
 }
+

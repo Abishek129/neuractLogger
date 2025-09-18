@@ -379,8 +379,14 @@ export function Networking({ onProceed }) {
           setDevMsgOk(false);
         } else {
           dispatch({ type: "DEV_ADD", device: res.item });
-          setDevMsg("Device saved");
-          setDevMsgOk(true);
+          const ok = res.success !== false;
+          setDevMsg(ok ? "Device saved" : res.error || "Saved but offline");
+          setDevMsgOk(ok);
+          if (ok) {
+            toast.success("Device saved");
+          } else {
+            toast.warn(res.error || "Device saved but test failed");
+          }
         }
       }
     } catch (e) {
@@ -394,47 +400,177 @@ export function Networking({ onProceed }) {
     setProbe(null);
   };
 
+  const refreshDevices = async () => {
+    try {
+      const { listDevices } = await import("../../lib/api/networking.js");
+      const res = await listDevices();
+      (res.items || []).forEach((device) =>
+        dispatch({ type: "DEV_ADD", device })
+      );
+    } catch (e) {
+      console.error("Refresh devices failed", e);
+    }
+  };
+
   const quickTestDevice = async (id) => {
     dispatch({
       type: "DEV_UPDATE_STATUS",
       id,
       patch: { status: "connecting" },
     });
-    const latency = Math.round(25 + Math.random() * 100);
-    await new Promise((r) => setTimeout(r, latency));
-    const ok = Math.random() > 0.1;
-    dispatch({
-      type: "DEV_UPDATE_STATUS",
-      id,
-      patch: {
-        status: ok ? "connected" : "degraded",
-        latencyMs: latency,
-        lastError: ok ? null : "Intermittent response",
-      },
-    });
+    try {
+      const { quickTestDevice: apiQuickTest } = await import(
+        "../../lib/api/networking.js"
+      );
+      const res = await apiQuickTest(id);
+      const ok = res?.success !== false;
+      dispatch({
+        type: "DEV_UPDATE_STATUS",
+        id,
+        patch: {
+          status: ok ? "connected" : "degraded",
+          latencyMs: res?.latencyMs ?? null,
+          lastError: ok ? null : res?.error || "Device test failed",
+        },
+      });
+      if (ok) toast.success("Device responded to quick test");
+      else toast.warn(res?.error || "Device test failed");
+    } catch (e) {
+      if (e?.status === 404) {
+        dispatch({ type: "DEV_DELETE", id });
+        if (selectedDeviceId === id) setSelectedDeviceId(null);
+        toast.info("Device no longer available");
+      } else {
+        const message = e?.body || e?.message || "Device test failed";
+        dispatch({
+          type: "DEV_UPDATE_STATUS",
+          id,
+          patch: {
+            status: "degraded",
+            latencyMs: null,
+            lastError:
+              typeof message === "string" ? message : "Device test failed",
+          },
+        });
+        toast.error("Device test failed");
+        console.error("Quick test error", e);
+      }
+    }
+    await refreshDevices();
   };
 
   const toggleConn = async (d) => {
-    if (d.status === "connected" || d.status === "degraded") {
+    const { id } = d;
+    if (d.status === "connected" || d.status === "degraded" || d.status === "reconnecting") {
       dispatch({
         type: "DEV_UPDATE_STATUS",
-        id: d.id,
-        patch: { status: "disconnected" },
+        id,
+        patch: { status: "disconnecting" },
       });
-    } else {
-      dispatch({
-        type: "DEV_UPDATE_STATUS",
-        id: d.id,
-        patch: { status: "connecting" },
-      });
-      const latency = Math.round(30 + Math.random() * 150);
-      await new Promise((r) => setTimeout(r, latency));
-      dispatch({
-        type: "DEV_UPDATE_STATUS",
-        id: d.id,
-        patch: { status: "connected", latencyMs: latency, lastError: null },
-      });
+      try {
+        const { disconnectDevice } = await import(
+          "../../lib/api/networking.js"
+        );
+        await disconnectDevice(id);
+        dispatch({
+          type: "DEV_UPDATE_STATUS",
+          id,
+          patch: { status: "disconnected", latencyMs: null, lastError: null },
+        });
+        toast.info("Device disconnected");
+      } catch (e) {
+        if (e?.status === 404) {
+          dispatch({ type: "DEV_DELETE", id });
+          if (selectedDeviceId === id) setSelectedDeviceId(null);
+          toast.info("Device already removed");
+        } else {
+          const message = e?.body || e?.message || "Disconnect failed";
+          dispatch({
+            type: "DEV_UPDATE_STATUS",
+            id,
+            patch: {
+              status: "degraded",
+              latencyMs: null,
+              lastError:
+                typeof message === "string" ? message : "Disconnect failed",
+            },
+          });
+          toast.error("Disconnect failed");
+          console.error("Disconnect error", e);
+        }
+      }
+      await refreshDevices();
+      return;
     }
+
+    dispatch({
+      type: "DEV_UPDATE_STATUS",
+      id,
+      patch: { status: "connecting" },
+    });
+    try {
+      const { connectDevice } = await import("../../lib/api/networking.js");
+      const res = await connectDevice(id);
+      dispatch({
+        type: "DEV_UPDATE_STATUS",
+        id,
+        patch: {
+          status: "connected",
+          latencyMs: res?.latencyMs ?? null,
+          lastError: null,
+        },
+      });
+      toast.success("Device connected");
+    } catch (e) {
+      if (e?.status === 404) {
+        dispatch({ type: "DEV_DELETE", id });
+        if (selectedDeviceId === id) setSelectedDeviceId(null);
+        toast.info("Device no longer available");
+      } else {
+        const message = e?.body || e?.message || "Connect failed";
+        dispatch({
+          type: "DEV_UPDATE_STATUS",
+          id,
+          patch: {
+            status: "degraded",
+            latencyMs: null,
+            lastError:
+              typeof message === "string" ? message : "Connect failed",
+          },
+        });
+        toast.error(
+          typeof message === "string"
+            ? `Connect failed: ${message}`
+            : "Connect failed"
+        );
+        console.error("Connect error", e);
+      }
+    }
+    await refreshDevices();
+  };
+
+  const removeDevice = async (id) => {
+    try {
+      const { deleteDevice } = await import("../../lib/api/networking.js");
+      await deleteDevice(id);
+      dispatch({ type: "DEV_DELETE", id });
+      if (selectedDeviceId === id) setSelectedDeviceId(null);
+      toast.success("Device deleted");
+    } catch (e) {
+      const message = e?.body || e?.message || "Delete failed";
+      if (e?.status === 404) {
+        dispatch({ type: "DEV_DELETE", id });
+        if (selectedDeviceId === id) setSelectedDeviceId(null);
+        toast.info("Device already removed");
+      } else {
+        toast.error(
+          typeof message === "string" ? `Delete failed: ${message}` : "Delete failed"
+        );
+        console.error("Delete device error", e);
+        return;
+      }
+    }
+    await refreshDevices();
   };
 
   // Databases
@@ -443,26 +579,58 @@ export function Networking({ onProceed }) {
     conn: "file:plc_logger.db",
   });
   const addTarget = async () => {
-    const { addDbTarget, listTargets } = await import(
-      "../../lib/api/networking.js"
-    );
-    await addDbTarget({ provider: dbForm.provider, conn: dbForm.conn });
-    const res = await listTargets();
-    dispatch({ type: "DB_SET_ALL", items: res.items || [] });
-    if (res.defaultId) dispatch({ type: "DB_SET_DEFAULT", id: res.defaultId });
+    try {
+      const { addDbTarget, listTargets } = await import(
+        "../../lib/api/networking.js"
+      );
+      await addDbTarget({ provider: dbForm.provider, conn: dbForm.conn });
+      const res = await listTargets();
+      dispatch({ type: "DB_SET_ALL", items: res.items || [] });
+      if (res.defaultId) dispatch({ type: "DB_SET_DEFAULT", id: res.defaultId });
+      toast.success("Database target saved");
+    } catch (e) {
+      const message = e?.body || e?.message || "Add target failed";
+      toast.error(
+        typeof message === "string"
+          ? `Add target failed: ${message}`
+          : "Add target failed"
+      );
+      console.error("Add target error", e);
+    }
   };
   const testTarget = async (t) => {
-    const { testDbTarget } = await import("../../lib/api/networking.js");
     dispatch({ type: "DB_MARK_TESTING", id: t.id });
-    const r = await testDbTarget({ id: t.id });
-    dispatch({
-      type: "DB_UPDATE_TARGET",
-      id: t.id,
-      patch: {
-        status: r.ok ? "ok" : "fail",
-        lastMsg: r.message || (r.ok ? "OK" : "fail"),
-      },
-    });
+    try {
+      const { testDbTarget } = await import("../../lib/api/networking.js");
+      const r = await testDbTarget({ id: t.id });
+      dispatch({
+        type: "DB_UPDATE_TARGET",
+        id: t.id,
+        patch: {
+          status: r.ok ? "ok" : "fail",
+          lastMsg: r.message || (r.ok ? "OK" : "Test failed"),
+        },
+      });
+      if (!r.ok) toast.error(r.message || "Database test failed");
+      else toast.success("Database test passed");
+    } catch (e) {
+      const message = e?.body || e?.message || "Database test failed";
+      dispatch({
+        type: "DB_UPDATE_TARGET",
+        id: t.id,
+        patch: {
+          status: "fail",
+          lastMsg:
+            typeof message === "string" ? message : "Database test failed",
+        },
+      });
+      toast.error(
+        typeof message === "string"
+          ? `Database test failed: ${message}`
+          : "Database test failed"
+      );
+      console.error("Database test error", e);
+    }
   };
   const setDefault = async (id) => {
     const { setDefaultTarget } = await import("../../lib/api/networking.js");
@@ -1275,19 +1443,9 @@ export function Networking({ onProceed }) {
                         Quick Test
                       </button>
                       <button
-                        onClick={async (e) => {
+                        onClick={(e) => {
                           e.stopPropagation();
-                          try {
-                            const { request } = await import(
-                              "../../lib/api/client.js"
-                            );
-                            await request(`/devices/${d.id}`, {
-                              method: "DELETE",
-                            });
-                            dispatch({ type: "DEV_DELETE", id: d.id });
-                          } catch (err) {
-                            /* ignore */
-                          }
+                          removeDevice(d.id);
                         }}
                       >
                         Delete

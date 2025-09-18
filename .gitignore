@@ -40,15 +40,13 @@ coverage.xml
 .venv/
 venv/
 
-# PyInstaller outputs
+# PyInstaller outputs (dist tracked)
 build/
-dist/
 
 # Node / Vite (apps/desktop)
 apps/desktop/node_modules/
 apps/desktop/.vite/
 apps/desktop/.eslintcache
-apps/desktop/dist/
 
 # Rust / Tauri (apps/desktop/src-tauri)
 apps/desktop/src-tauri/target/
@@ -72,3 +70,6 @@ installer/**/*.msi
 /qc
 /file
 
+
+# Tray build outputs
+build-tray/

@@ -4,7 +4,7 @@ param(
 
 $ErrorActionPreference = 'SilentlyContinue'
 
-$lf = Join-Path $env:ProgramData 'PLCLogger\agent\agent.lock.json'
+$lf = Join-Path $env:ProgramData 'NeuractLogger\agent\agent.lock.json'
 if (-not (Test-Path $lf)) { Write-Host "Lockfile not found: $lf" -ForegroundColor Yellow }
 $tok = ''
 try { $tok = (Get-Content $lf -Raw | ConvertFrom-Json).token } catch {}
@@ -19,4 +19,5 @@ try { Invoke-RestMethod -Method Post -Uri "$Base/networking/ping" -Headers $h -C
 
 Write-Host "`nPOST /networking/opcua/test" -ForegroundColor Cyan
 try { Invoke-RestMethod -Method Post -Uri "$Base/networking/opcua/test" -Headers $h -ContentType 'application/json' -Body (@{ endpoint='opc.tcp://127.0.0.1:4840' } | ConvertTo-Json) | Format-List | Out-String | Write-Host } catch { Write-Host $_.Exception.Message -ForegroundColor Yellow }
+
 
