@@ -4,8 +4,25 @@ import threading
 import time
 from typing import Dict, Any, List, Optional
 import logging
+from pathlib import Path
 
 from . import appdb
+
+
+def _ensure_store_logger(logger: logging.Logger) -> None:
+    try:
+        if logger.level == logging.NOTSET:
+            logger.setLevel(logging.INFO)
+        log_path = Path(__file__).resolve().parent / "store.log"
+        for h in logger.handlers:
+            if isinstance(h, logging.FileHandler) and Path(getattr(h, "baseFilename", "")).resolve() == log_path.resolve():
+                return
+        fh = logging.FileHandler(log_path, encoding="utf-8")
+        fh.setLevel(logging.INFO)
+        fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        logger.addHandler(fh)
+    except Exception:
+        pass
 
 
 class Store:
@@ -36,6 +53,7 @@ class Store:
         self._dev_thread_started: bool = False
         # Logger
         self._log = logging.getLogger(__name__)
+        _ensure_store_logger(self._log)
 
     @classmethod
     def instance(cls) -> "Store":
@@ -149,6 +167,10 @@ class Store:
 
     # -------------- DB Targets --------------
     def add_db_target(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            self._log.info("add_db_target: payload keys=%s", list((payload or {}).keys()))
+        except Exception:
+            pass
         provider = (payload.get("provider") or "").strip() or "sqlite"
         conn = (payload.get("conn") or "").strip() or ":memory:"
         tid = payload.get("id") or f"db_{int(time.time()*1000)}"
@@ -157,6 +179,10 @@ class Store:
             # Deduplicate by provider+conn
             for existing in self._db_targets.values():
                 if (existing.get("provider") or "").lower() == provider.lower() and str(existing.get("conn") or "").lower() == conn.lower():
+                    try:
+                        self._log.info("add_db_target: dedup hit id=%s", existing.get("id"))
+                    except Exception:
+                        pass
                     if payload.get("status"):
                         existing["status"] = payload.get("status")
                     if payload.get("lastMsg") is not None:
@@ -164,7 +190,18 @@ class Store:
                     appdb.save_target(existing)
                     return existing
             self._db_targets[tid] = item
+            try:
+                self._log.info("add_db_target: saving id=%s provider=%s", tid, provider)
+            except Exception:
+                pass
+            self._log.info("trying saving")
             appdb.save_target(item)
+            self._log.info("finised saving")
+        try:
+            self._log.info("add_db_target: saved id=%s", tid)
+        except Exception:
+            pass
+
         return item
 
     def get_db_target(self, tid: str) -> Optional[Dict[str, Any]]:
@@ -372,6 +409,18 @@ class Store:
             self._log.info(f"table.bind: table={table_id} deviceId={device_id}")
         except Exception:
             pass
+
+    def set_table_db_target(self, table_id: str, db_target_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        with self._mtx:
+            for t in self._tables:
+                if t.get("id") == table_id:
+                    t["dbTargetId"] = db_target_id
+                    try:
+                        appdb.set_table_db_target(table_id, db_target_id)
+                    except Exception:
+                        pass
+                    return t
+        return None
 
     def copy_mapping(self, src_table_id: str, dst_table_id: str) -> Dict[str, Any]:
         with self._mtx:

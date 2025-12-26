@@ -202,6 +202,45 @@ def bulk_create(payload: Dict[str, Any]) -> Dict[str, Any]:
     return resp
 
 
+@router.post("/bulk_update_target")
+def bulk_update_target(payload: Dict[str, Any]) -> Dict[str, Any]:
+    db_target_id = payload.get("dbTargetId")
+    if not db_target_id:
+        raise HTTPException(status_code=400, detail="DB_TARGET_REQUIRED")
+    ids: List[str] = payload.get("ids") or []
+    name_like = payload.get("nameLike")
+    if not ids and not name_like:
+        raise HTTPException(status_code=400, detail="NO_TABLES")
+    tables: List[Dict[str, Any]] = []
+    if ids:
+        for tid in ids:
+            t = Store.instance().get_table(tid)
+            if t:
+                tables.append(t)
+    if name_like:
+        tables.extend(Store.instance().list_tables(name_like=name_like))
+    # De-dup by id
+    seen: set[str] = set()
+    uniq: List[Dict[str, Any]] = []
+    for t in tables:
+        tid = t.get("id")
+        if not tid or tid in seen:
+            continue
+        seen.add(tid)
+        uniq.append(t)
+    updated = 0
+    items: List[Dict[str, Any]] = []
+    for t in uniq:
+        tid = t.get("id")
+        if not tid:
+            continue
+        ut = Store.instance().set_table_db_target(tid, db_target_id)
+        if ut:
+            updated += 1
+            items.append(ut)
+    return {"success": True, "updated": updated, "items": items}
+
+
 @router.get("")
 def list_tables(
     parentSchemaId: Optional[str] = Query(None),

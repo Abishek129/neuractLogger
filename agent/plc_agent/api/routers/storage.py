@@ -6,9 +6,28 @@ from sqlalchemy import create_engine
 
 from ..store import Store
 from .. import appdb
+import logging
+from pathlib import Path
 
-
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/storage")
+
+
+def _ensure_storage_logger() -> None:
+    try:
+        if log.level == logging.NOTSET:
+            log.setLevel(logging.INFO)
+        log_dir = Path(__file__).resolve().parent
+        log_path = log_dir / "storage.log"
+        for h in log.handlers:
+            if isinstance(h, logging.FileHandler) and Path(getattr(h, "baseFilename", "")).resolve() == log_path.resolve():
+                return
+        fh = logging.FileHandler(log_path, encoding="utf-8")
+        fh.setLevel(logging.INFO)
+        fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        log.addHandler(fh)
+    except Exception:
+        pass
 
 
 @router.get("/targets")
@@ -22,8 +41,13 @@ def list_targets() -> Dict[str, Any]:
 
 @router.post("/targets")
 def add_target(payload: Dict[str, Any]) -> Dict[str, Any]:
+    _ensure_storage_logger()
+    log.info("add target called")
+
     try:
+        log.info("before item called")
         item = Store.instance().add_db_target(payload)
+        log.info("item called")
         return {"success": True, "item": item}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

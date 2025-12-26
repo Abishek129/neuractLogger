@@ -3,6 +3,9 @@ from __future__ import annotations
 import threading
 import time
 import logging
+from collections import deque
+import csv
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List, Tuple
 
@@ -18,6 +21,7 @@ router = APIRouter(prefix="/jobs")
 _job_threads: Dict[str, threading.Thread] = {}
 _job_stops: Dict[str, threading.Event] = {}
 log = logging.getLogger(__name__)
+_thread_local = threading.local()
 
 
 def _db_engine_for_table(table_id: str):
@@ -32,7 +36,15 @@ def _db_engine_for_table(table_id: str):
         if target and target.get("provider") == "sqlite":
             conn = target.get("conn") or ":memory:"
             url = f"sqlite:///{conn}" if not str(conn).startswith("sqlite:") else conn
-    return create_engine(url)
+    cache = getattr(_thread_local, "engine_cache", None)
+    if cache is None:
+        cache = {}
+        _thread_local.engine_cache = cache
+    eng = cache.get(url)
+    if eng is None:
+        eng = create_engine(url)
+        cache[url] = eng
+    return eng
 
 
 # --- NEURACT physical ident helpers (mirror tables router) ---
@@ -74,7 +86,8 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
     values: Dict[str, Any] = {}
     if proto == "opcua":
         try:
-            from opcua import Client  # type: ignore
+            import opcua  # type: ignore
+            _ = opcua
         except Exception as e:
             raise RuntimeError(f"OPCUA_PKG_MISSING: {e}")
         endpoint = params.get("endpoint") or "opc.tcp://127.0.0.1:4840/freeopcua/server/"
@@ -83,11 +96,8 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
             safe_ep = endpoint.replace("0.0.0.0", "127.0.0.1")
             log.info("OPC UA endpoint normalized from %s to %s", endpoint, safe_ep)
             endpoint = safe_ep
-        client = Client(endpoint)
         try:
-            log.info("OPC UA: connecting endpoint=%s", endpoint)
-            client.connect()
-            log.info("OPC UA: connected endpoint=%s", endpoint)
+            client = _get_opcua_client(endpoint)
             for field, spec in rows.items():
                 if (spec.get("protocol") or "").lower() != "opcua":
                     continue
@@ -95,7 +105,13 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
                 if not nid:
                     continue
                 try:
-                    node = client.get_node(nid)
+                    key = (endpoint, str(nid))
+                    with _opcua_lock:
+                        node = _opcua_nodes.get(key)
+                    if node is None:
+                        node = client.get_node(nid)
+                        with _opcua_lock:
+                            _opcua_nodes[key] = node
                     val = node.get_value()
                     # Apply scale if present
                     sc = spec.get("scale")
@@ -110,12 +126,8 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
                     values[field] = None
         except Exception as e:
             log.error("OPC UA connect/read failed endpoint=%s err=%s", endpoint, e)
+            _drop_opcua_client(endpoint)
             raise
-        finally:
-            try:
-                client.disconnect()
-            except Exception:
-                pass
     elif proto == "modbus":
         # TODO: Implement TCP/RTU reads. For now, stub None values.
         for field, spec in rows.items():
@@ -164,6 +176,165 @@ def _eval_op(val: Optional[float], prev: Optional[float], op: str, threshold: Op
 
 _job_last_values: Dict[str, Dict[str, Dict[str, Any]]] = {}
 _job_cooldowns: Dict[str, Dict[str, float]] = {}
+_opcua_clients: Dict[str, Any] = {}
+_opcua_nodes: Dict[Tuple[str, str], Any] = {}
+_opcua_lock = threading.RLock()
+_thread_cpu_cache: Dict[int, float] = {}
+_thread_cpu_cache_ts = 0.0
+_thread_cpu_cache_lock = threading.Lock()
+_process_stats_cache: Optional[Tuple[float, float]] = None
+_process_stats_ts = 0.0
+_process_stats_lock = threading.Lock()
+_bench_csv_lock = threading.Lock()
+
+
+def _get_opcua_client(endpoint: str):
+    with _opcua_lock:
+        client = _opcua_clients.get(endpoint)
+    if client:
+        return client
+    from opcua import Client  # type: ignore
+    client = Client(endpoint)
+    client.connect()
+    with _opcua_lock:
+        _opcua_clients[endpoint] = client
+    return client
+
+
+def _drop_opcua_client(endpoint: str) -> None:
+    with _opcua_lock:
+        client = _opcua_clients.pop(endpoint, None)
+        if client:
+            for key in list(_opcua_nodes.keys()):
+                if key[0] == endpoint:
+                    _opcua_nodes.pop(key, None)
+    if client:
+        try:
+            client.disconnect()
+        except Exception:
+            pass
+
+
+def _percentile_ms(samples: List[float], pct: float) -> Optional[float]:
+    if not samples:
+        return None
+    s = sorted(samples)
+    if len(s) == 1:
+        return s[0]
+    idx = int((pct / 100.0) * (len(s) - 1))
+    return s[idx]
+
+
+def _get_thread_cpu_time_sec(thread_id: int) -> Optional[float]:
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return None
+    now = time.perf_counter()
+    with _thread_cpu_cache_lock:
+        global _thread_cpu_cache_ts
+        if (now - _thread_cpu_cache_ts) > 1.0 or not _thread_cpu_cache:
+            try:
+                proc = psutil.Process()
+                _thread_cpu_cache = {t.id: float(t.user_time + t.system_time) for t in proc.threads()}
+                _thread_cpu_cache_ts = now
+            except Exception:
+                return None
+        return _thread_cpu_cache.get(thread_id)
+
+
+def _get_process_stats() -> Optional[Tuple[float, float]]:
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return None
+    now = time.perf_counter()
+    with _process_stats_lock:
+        global _process_stats_ts, _process_stats_cache
+        if (now - _process_stats_ts) > 1.0 or _process_stats_cache is None:
+            try:
+                proc = psutil.Process()
+                cpu_pct = float(proc.cpu_percent(interval=None))
+                rss_mb = float(proc.memory_info().rss) / (1024.0 * 1024.0)
+                _process_stats_cache = (cpu_pct, rss_mb)
+                _process_stats_ts = now
+            except Exception:
+                return None
+        return _process_stats_cache
+
+
+def _append_bench_csv(row: Dict[str, Any]) -> None:
+    log_dir = Path(__file__).resolve().parent.parent / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    primary = log_dir / "bench_metrics.csv"
+    pending = log_dir / "bench_metrics_pending.csv"
+    header = [
+        "ts_utc",
+        "job_id",
+        "window_secs",
+        "reads_per_sec",
+        "writes_per_sec",
+        "read_avg_ms",
+        "write_avg_ms",
+        "loop_p95_ms",
+        "overrun_pct",
+        "cpu_time_ms",
+        "proc_cpu_pct",
+        "proc_rss_mb",
+        "read_err",
+        "write_err",
+    ]
+
+    def _write_row(path: Path) -> None:
+        needs_header = not path.exists()
+        with path.open("a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=header)
+            if needs_header:
+                writer.writeheader()
+            writer.writerow(row)
+
+    def _drain_pending() -> None:
+        if not pending.exists():
+            return
+        try:
+            lines = pending.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            return
+        if not lines:
+            try:
+                pending.unlink()
+            except Exception:
+                pass
+            return
+        if lines and lines[0].split(",")[0] == header[0]:
+            lines = lines[1:]
+        if not lines:
+            try:
+                pending.unlink()
+            except Exception:
+                pass
+            return
+        with primary.open("a", encoding="utf-8", newline="") as f:
+            for line in lines:
+                f.write(line + "\n")
+        try:
+            pending.unlink()
+        except Exception:
+            pass
+
+    with _bench_csv_lock:
+        try:
+            _write_row(primary)
+            _drain_pending()
+        except Exception as e:
+            try:
+                _write_row(pending)
+            except Exception:
+                pass
+            try:
+                log.warning("Bench CSV write failed (%s); wrote to %s", e, pending.name)
+            except Exception:
+                pass
 
 
 def _run_job_loop(job_id: str):
@@ -191,6 +362,20 @@ def _run_job_loop(job_id: str):
         METRICS.get_job(job_id).start_run()
     except Exception:
         pass
+    # Lightweight benchmark counters (per reporting window)
+    report_every = 2.0
+    last_report = time.perf_counter()
+    win_reads_ok = 0
+    win_reads_err = 0
+    win_writes_ok = 0
+    win_writes_err = 0
+    win_read_ms_sum = 0.0
+    win_write_ms_sum = 0.0
+    win_loops = 0
+    win_overruns = 0
+    loop_samples_ms = deque(maxlen=1000)
+    thread_id = threading.get_native_id()
+    last_cpu_time = _get_thread_cpu_time_sec(thread_id)
     while not stop_event.is_set():
         t_start = time.perf_counter()
         if jtype == "continuous":
@@ -199,9 +384,12 @@ def _run_job_loop(job_id: str):
                 try:
                     t0 = time.perf_counter()
                     vals = _read_mapping_values(tbl_id)
+                    win_read_ms_sum += (time.perf_counter() - t0) * 1000.0
+                    win_reads_ok += 1
                     METRICS.get_job(job_id).record_read((time.perf_counter() - t0) * 1000.0, ok=True)
                 except Exception as e:
                     log.warning("Job %s read failed for table %s: %s", job_id, tbl_id, e)
+                    win_reads_err += 1
                     try:
                         METRICS.get_job(job_id).record_read((time.perf_counter() - t_start) * 1000.0, ok=False)
                         METRICS.get_job(job_id).record_error("READ_ERROR", str(e))
@@ -224,6 +412,8 @@ def _run_job_loop(job_id: str):
                     t1 = time.perf_counter()
                     with engine.begin() as conn:
                         conn.execute(text(sql), params)
+                    win_write_ms_sum += (time.perf_counter() - t1) * 1000.0
+                    win_writes_ok += 1
                     try:
                         target_id = table.get("dbTargetId") if table else None
                         METRICS.get_job(job_id).record_write((time.perf_counter() - t1) * 1000.0, ok=True, rows=1, table_id=tbl_id, target_id=target_id)
@@ -231,6 +421,7 @@ def _run_job_loop(job_id: str):
                         pass
                 except Exception as e:
                     log.warning("Job %s write failed for table %s: %s", job_id, tbl_id, e)
+                    win_writes_err += 1
                     try:
                         table = Store.instance().get_table(tbl_id)
                         target_id = table.get("dbTargetId") if table else None
@@ -252,9 +443,12 @@ def _run_job_loop(job_id: str):
                 try:
                     t0 = time.perf_counter()
                     vals = _read_mapping_values(tbl_id)
+                    win_read_ms_sum += (time.perf_counter() - t0) * 1000.0
+                    win_reads_ok += 1
                     METRICS.get_job(job_id).record_read((time.perf_counter() - t0) * 1000.0, ok=True)
                 except Exception as e:
                     log.warning("Trigger job %s read failed for table %s: %s", job_id, tbl_id, e)
+                    win_reads_err += 1
                     try:
                         METRICS.get_job(job_id).record_read((time.perf_counter() - t_start) * 1000.0, ok=False)
                         METRICS.get_job(job_id).record_error("READ_ERROR", str(e))
@@ -304,6 +498,8 @@ def _run_job_loop(job_id: str):
                     t1 = time.perf_counter()
                     with engine.begin() as conn:
                         conn.execute(text(sql), params)
+                    win_write_ms_sum += (time.perf_counter() - t1) * 1000.0
+                    win_writes_ok += 1
                     try:
                         target_id = table.get("dbTargetId") if table else None
                         METRICS.get_job(job_id).record_write((time.perf_counter() - t1) * 1000.0, ok=True, rows=1, table_id=tbl_id, target_id=target_id)
@@ -311,6 +507,7 @@ def _run_job_loop(job_id: str):
                         pass
                 except Exception as e:
                     log.warning("Trigger job %s write failed for table %s: %s", job_id, tbl_id, e)
+                    win_writes_err += 1
                     try:
                         table = Store.instance().get_table(tbl_id)
                         target_id = table.get("dbTargetId") if table else None
@@ -320,6 +517,73 @@ def _run_job_loop(job_id: str):
                         pass
         # sleep remaining time
         dt = time.perf_counter() - t_start
+        win_loops += 1
+        if dt > interval:
+            win_overruns += 1
+        loop_samples_ms.append(dt * 1000.0)
+        now = time.perf_counter()
+        if (now - last_report) >= report_every:
+            elapsed = now - last_report
+            reads_per_sec = win_reads_ok / elapsed if elapsed > 0 else 0.0
+            writes_per_sec = win_writes_ok / elapsed if elapsed > 0 else 0.0
+            p95 = _percentile_ms(list(loop_samples_ms), 95.0)
+            overrun_pct = (win_overruns / win_loops * 100.0) if win_loops else 0.0
+            read_avg_ms = (win_read_ms_sum / win_reads_ok) if win_reads_ok else 0.0
+            write_avg_ms = (win_write_ms_sum / win_writes_ok) if win_writes_ok else 0.0
+            p95_txt = f"{p95:.2f}" if p95 is not None else "na"
+            cpu_time_now = _get_thread_cpu_time_sec(thread_id)
+            cpu_time_ms = None
+            if cpu_time_now is not None and last_cpu_time is not None:
+                cpu_time_ms = max(0.0, (cpu_time_now - last_cpu_time) * 1000.0)
+            proc_stats = _get_process_stats()
+            proc_cpu = proc_stats[0] if proc_stats else None
+            proc_rss = proc_stats[1] if proc_stats else None
+            log.info(
+                "Job %s bench window=%.1fs reads/s=%.1f writes/s=%.1f read_avg_ms=%.2f write_avg_ms=%.2f loop_p95_ms=%s overrun_pct=%.1f cpu_time_ms=%s proc_cpu_pct=%s proc_rss_mb=%s read_err=%s write_err=%s",
+                job_id,
+                elapsed,
+                reads_per_sec,
+                writes_per_sec,
+                read_avg_ms,
+                write_avg_ms,
+                p95_txt,
+                overrun_pct,
+                f"{cpu_time_ms:.2f}" if cpu_time_ms is not None else "na",
+                f"{proc_cpu:.1f}" if proc_cpu is not None else "na",
+                f"{proc_rss:.1f}" if proc_rss is not None else "na",
+                win_reads_err,
+                win_writes_err,
+            )
+            try:
+                _append_bench_csv({
+                    "ts_utc": datetime.now(timezone.utc).isoformat(),
+                    "job_id": job_id,
+                    "window_secs": f"{elapsed:.1f}",
+                    "reads_per_sec": f"{reads_per_sec:.1f}",
+                    "writes_per_sec": f"{writes_per_sec:.1f}",
+                    "read_avg_ms": f"{read_avg_ms:.2f}",
+                    "write_avg_ms": f"{write_avg_ms:.2f}",
+                    "loop_p95_ms": p95_txt,
+                    "overrun_pct": f"{overrun_pct:.1f}",
+                    "cpu_time_ms": f"{cpu_time_ms:.2f}" if cpu_time_ms is not None else "na",
+                    "proc_cpu_pct": f"{proc_cpu:.1f}" if proc_cpu is not None else "na",
+                    "proc_rss_mb": f"{proc_rss:.1f}" if proc_rss is not None else "na",
+                    "read_err": str(win_reads_err),
+                    "write_err": str(win_writes_err),
+                })
+            except Exception:
+                pass
+            last_cpu_time = cpu_time_now if cpu_time_now is not None else last_cpu_time
+            last_report = now
+            win_reads_ok = 0
+            win_reads_err = 0
+            win_writes_ok = 0
+            win_writes_err = 0
+            win_read_ms_sum = 0.0
+            win_write_ms_sum = 0.0
+            win_loops = 0
+            win_overruns = 0
+            loop_samples_ms.clear()
         to_sleep = max(0.0, interval - dt)
         if to_sleep > 0:
             stop_event.wait(timeout=to_sleep)
@@ -409,6 +673,33 @@ def stop_job(job_id: str) -> Dict[str, Any]:
     return {"success": True, "message": "stopped"}
 
 
+@router.post("/stop_all")
+def stop_all_jobs() -> Dict[str, Any]:
+    store = Store.instance()
+    jobs = store.list_jobs()
+    stopped = 0
+    for job in jobs:
+        job_id = job.get("id")
+        if not job_id:
+            continue
+        ev = _job_stops.get(job_id)
+        if ev:
+            ev.set()
+        thr = _job_threads.get(job_id)
+        if thr and thr.is_alive():
+            thr.join(timeout=2.0)
+        try:
+            run = METRICS.get_job(job_id).end_run()
+            if run:
+                from .. import appdb
+                appdb.insert_job_run(job_id, run)
+        except Exception:
+            pass
+        store.set_job_status(job_id, "stopped")
+        stopped += 1
+    return {"success": True, "stopped": stopped}
+
+
 @router.post("/{job_id}/dry_run")
 def dry_run(job_id: str) -> Dict[str, Any]:
     job = Store.instance().get_job(job_id)
@@ -495,6 +786,53 @@ def delete_job(job_id: str) -> Dict[str, Any]:
     except Exception:
         pass
     return {"success": True}
+
+
+@router.delete("")
+def delete_jobs_bulk(payload: Dict[str, Any]) -> Dict[str, Any]:
+    ids = payload.get("ids") or []
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(status_code=400, detail="NO_JOB_IDS")
+    deleted = 0
+    failed: List[Dict[str, Any]] = []
+    for job_id in ids:
+        try:
+            job = Store.instance().get_job(job_id)
+            if not job:
+                failed.append({"id": job_id, "error": "JOB_NOT_FOUND"})
+                continue
+            try:
+                ev = _job_stops.get(job_id)
+                if ev:
+                    ev.set()
+                thr = _job_threads.get(job_id)
+                if thr and thr.is_alive():
+                    thr.join(timeout=2.0)
+                try:
+                    run = METRICS.get_job(job_id).end_run()
+                    if run:
+                        from .. import appdb
+                        appdb.insert_job_run(job_id, run)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            ok = Store.instance().delete_job(job_id)
+            if not ok:
+                failed.append({"id": job_id, "error": "JOB_DELETE_FAILED"})
+                continue
+            try:
+                METRICS.jobs.pop(job_id, None)
+                _job_threads.pop(job_id, None)
+                _job_stops.pop(job_id, None)
+                _job_last_values.pop(job_id, None)
+                _job_cooldowns.pop(job_id, None)
+            except Exception:
+                pass
+            deleted += 1
+        except Exception as e:
+            failed.append({"id": job_id, "error": str(e)})
+    return {"success": True, "deleted": deleted, "failed": failed}
 
 
 @router.get("/{job_id}/runs")
