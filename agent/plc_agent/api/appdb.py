@@ -379,6 +379,14 @@ def set_table_device_binding(table_id: str, device_id: Optional[str]) -> None:
         )
 
 
+def set_table_db_target(table_id: str, db_target_id: Optional[str]) -> None:
+    with _conn() as c:
+        c.execute(
+            "UPDATE app_device_tables SET db_target_id=? WHERE id=?",
+            (db_target_id, table_id),
+        )
+
+
 # ---------- Gateways ----------
 def load_gateways() -> List[Dict[str, Any]]:
     with _conn() as c:

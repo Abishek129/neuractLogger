@@ -31,10 +31,9 @@ def create_app() -> FastAPI:
             logging.basicConfig(level=getattr(logging, lvl, logging.INFO))
         # File logs under ProgramData
         try:
-            base = os.environ.get("ProgramData") or os.getcwd()
-            log_dir = Path(base) / "NeuractLogger" / "agent" / "logs"
+            log_dir = Path(__file__).resolve().parent / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
-            fh = RotatingFileHandler(log_dir / "agent.log", maxBytes=1_000_000, backupCount=5, encoding="utf-8")
+            fh = logging.FileHandler(log_dir / "agent.log", encoding="utf-8")
             fh.setLevel(getattr(logging, os.environ.get("AGENT_LOG_LEVEL", "INFO").upper(), logging.INFO))
             fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
             fh.setFormatter(fmt)

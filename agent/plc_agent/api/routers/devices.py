@@ -15,6 +15,7 @@ router = APIRouter(prefix="/devices")
 
 @router.get("")
 def list_devices() -> Dict[str, Any]:
+
     return {"items": Store.instance().list_devices()}
 
 
