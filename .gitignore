@@ -52,6 +52,12 @@ apps/desktop/.eslintcache
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
 
+# Rust jobs data outputs (benchmarks, reports)
+agent/rust_jobs/**/*.csv
+agent/rust_jobs/**/*.xlsx
+agent/rust_jobs/**/*.png
+agent/rust_jobs/**/*.log
+
 # WiX / Installer artifacts
 installer/**/*.wixobj
 installer/**/*.wixpdb
@@ -73,3 +79,10 @@ installer/**/*.msi
 
 # Tray build outputs
 build-tray/
+
+
+target/
+**/target/
+*.pdb
+*.rlib
+*.rmeta
