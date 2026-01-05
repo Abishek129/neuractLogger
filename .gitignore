@@ -58,6 +58,10 @@ agent/rust_jobs/**/*.xlsx
 agent/rust_jobs/**/*.png
 agent/rust_jobs/**/*.log
 
+# Rust jobs toolchain caches
+agent/rust_jobs/target/
+agent/rust_jobs/vcpkg/
+
 # WiX / Installer artifacts
 installer/**/*.wixobj
 installer/**/*.wixpdb
