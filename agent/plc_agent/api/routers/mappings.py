@@ -442,22 +442,35 @@ def _save_mapping_to_user_db(table: Dict[str, Any], rows: Dict[str, Dict[str, An
     with engine.begin() as conn:
         for k, v in (rows or {}).items():
             try:
-                conn.execute(
-                    text(
-                        f"INSERT OR REPLACE INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id)"
-                        " VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev)"
-                    ),
-                    {
-                        "t": t_ident["name"],
-                        "k": k,
-                        "p": v.get("protocol"),
-                        "a": v.get("address") or v.get("nodeId"),
-                        "dt": v.get("dataType"),
-                        "s": v.get("scale"),
-                        "d": v.get("deadband"),
-                        "dev": device_id,
-                    },
-                )
+                params = {
+                    "t": t_ident["name"],
+                    "k": k,
+                    "p": v.get("protocol"),
+                    "a": v.get("address") or v.get("nodeId"),
+                    "dt": v.get("dataType"),
+                    "s": v.get("scale"),
+                    "d": v.get("deadband"),
+                    "dev": device_id,
+                }
+                if _dialect_name(engine).startswith("postgres"):
+                    conn.execute(
+                        text(
+                            f"INSERT INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id) "
+                            "VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev) "
+                            "ON CONFLICT (table_name, field_key) DO UPDATE SET "
+                            "protocol=EXCLUDED.protocol, address=EXCLUDED.address, data_type=EXCLUDED.data_type, "
+                            "scale=EXCLUDED.scale, deadband=EXCLUDED.deadband, device_id=EXCLUDED.device_id"
+                        ),
+                        params,
+                    )
+                else:
+                    conn.execute(
+                        text(
+                            f"INSERT OR REPLACE INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id)"
+                            " VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev)"
+                        ),
+                        params,
+                    )
             except Exception:
                 # Basic upsert fallback: delete then insert
                 try:

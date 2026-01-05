@@ -52,17 +52,22 @@ def _engine_for_target(target_id: Optional[str]):
     else:
         did = store.get_default_db_target()
         t = store.get_db_target(did) if did else None
-    if t and t.get("provider") == "sqlite":
+    if t:
+        provider = (t.get("provider") or "sqlite").lower()
         conn = t.get("conn") or ":memory:"
-        if str(conn).startswith("sqlite:"):
+        if provider == "sqlite":
+            if str(conn).startswith("sqlite:"):
+                url = str(conn)
+            else:
+                # Resolve to absolute path to avoid CWD ambiguity
+                try:
+                    p = Path(str(conn)).expanduser().resolve()
+                    url = f"sqlite:///{p.as_posix()}"
+                except Exception:
+                    url = f"sqlite:///{conn}"
+        elif provider in ("postgres", "postgresql", "psycopg2", "sqlserver", "mssql", "mysql"):
+            # Use raw SQLAlchemy URL for non-sqlite targets.
             url = str(conn)
-        else:
-            # Resolve to absolute path to avoid CWD ambiguity
-            try:
-                p = Path(str(conn)).expanduser().resolve()
-                url = f"sqlite:///{p.as_posix()}"
-            except Exception:
-                url = f"sqlite:///{conn}"
     return create_engine(url)
 
 

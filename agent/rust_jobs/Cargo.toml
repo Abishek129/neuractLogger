@@ -1,0 +1,18 @@
+[package]
+name = "neuract-job-runner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["clock"] }
+env_logger = "0.11"
+log = "0.4"
+opcua = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sysinfo = "0.30"
+tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "time"] }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
+windows = { version = "0.52", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }

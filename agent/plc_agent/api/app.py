@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 
 from .version import VERSION
-from .routers import health, schemas, jobs, networking, storage
+from .routers import health, schemas, jobs, jobs2, networking, storage
 from .routers import system as system_router
 from .routers import db_metrics as db_metrics_router
 from .routers import reports as reports_router
@@ -98,6 +98,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router.router)
     app.include_router(schemas.router)
     app.include_router(jobs.router)
+    app.include_router(jobs2.router)
     app.include_router(networking.router)
     app.include_router(storage.router)
     app.include_router(devices_router.router)
