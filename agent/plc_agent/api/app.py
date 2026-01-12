@@ -109,14 +109,6 @@ def create_app() -> FastAPI:
     app.include_router(debug_router.router)
     # Ensure token exists early
     get_or_create_token()
-    # Align DPAPI scope: rekey secrets under current context (machine scope for service)
-    try:
-        from .appdb import rekey_all_device_params as _rekey
-        changed = _rekey()
-        if changed:
-            print(f"DPAPI rekey: updated {changed} device secret(s)")
-    except Exception as _e:
-        print("DPAPI rekey warning:", _e)
     # Load persisted App Local DB state
     try:
         Store.instance().load_from_app_db()

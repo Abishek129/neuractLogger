@@ -151,7 +151,6 @@ def init() -> None:
                 id TEXT PRIMARY KEY,
                 name TEXT UNIQUE,
                 protocol TEXT,
-                params_json TEXT,
                 status TEXT,
                 latency_ms INTEGER,
                 last_error TEXT
@@ -171,6 +170,29 @@ def init() -> None:
                 except Exception:
                     pass
         _ensure_dev("auto_reconnect", "INTEGER")
+        # Protocol-specific params tables
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS protocol_type_modbus (
+                device_id TEXT PRIMARY KEY,
+                address TEXT,
+                port INTEGER,
+                unit_id INTEGER,
+                mode TEXT,
+                timeout_ms INTEGER,
+                retries INTEGER
+            )
+            """
+        )
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS protocol_type_opcua (
+                device_id TEXT PRIMARY KEY,
+                endpoint TEXT,
+                auth TEXT
+            )
+            """
+        )
         # Jobs config persistence
         c.execute(
             """
@@ -583,39 +605,6 @@ def _dpapi_available() -> bool:
         return False
 
 
-def _dpapi_protect(data: bytes) -> Optional[bytes]:
-    if not _dpapi_available():
-        return None
-    try:
-        import ctypes
-        import ctypes.wintypes as wt
-
-        class DATA_BLOB(ctypes.Structure):
-            _fields_ = [("cbData", wt.DWORD), ("pbData", wt.LPBYTE)]
-
-        crypt32 = ctypes.WinDLL('crypt32', use_last_error=True)
-        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-
-        blob_in = DATA_BLOB(len(data), ctypes.cast(ctypes.create_string_buffer(data), wt.LPBYTE))
-        blob_out = DATA_BLOB()
-        # Use machine scope if requested (service context)
-        flags = 0
-        try:
-            if os.environ.get('APP_DPAPI_MACHINE') in ('1','true','True') or os.environ.get('AGENT_DPAPI_MACHINE') in ('1','true','True'):
-                flags |= 0x4  # CRYPTPROTECT_LOCAL_MACHINE
-        except Exception:
-            pass
-        if not crypt32.CryptProtectData(ctypes.byref(blob_in), None, None, None, None, flags, ctypes.byref(blob_out)):
-            return None
-        try:
-            out = ctypes.string_at(blob_out.pbData, blob_out.cbData)
-            return out
-        finally:
-            kernel32.LocalFree(blob_out.pbData)
-    except Exception:
-        return None
-
-
 def _dpapi_unprotect(data: bytes) -> Optional[bytes]:
     if not _dpapi_available():
         return None
@@ -650,19 +639,6 @@ def _dpapi_unprotect(data: bytes) -> Optional[bytes]:
         return None
 
 
-def _params_dump(params: Dict[str, Any]) -> str:
-    import json as _json
-    try:
-        raw = _json.dumps(params or {}).encode('utf-8')
-    except Exception:
-        raw = b"{}"
-    enc = _dpapi_protect(raw)
-    if enc is None:
-        return _json.dumps(params or {})
-    import base64 as _b64
-    return "ENCv1:" + _b64.b64encode(enc).decode('ascii')
-
-
 def _params_load(text: Optional[str]) -> Dict[str, Any]:
     if not text:
         return {}
@@ -686,15 +662,189 @@ def _params_load(text: Optional[str]) -> Dict[str, Any]:
         return {}
 
 
+# ---------- Device protocol params ----------
+def _device_columns(c: sqlite3.Connection) -> set:
+    try:
+        return {r[1] for r in c.execute("PRAGMA table_info(app_devices)").fetchall()}
+    except Exception:
+        return set()
+
+
+def _to_int(value: Any) -> Optional[int]:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _canonical_auth(value: Any) -> Optional[str]:
+    s = (value or "").strip()
+    if not s:
+        return "Anonymous"
+    low = s.lower()
+    if low in ("anonymous", "anon", "none"):
+        return "Anonymous"
+    if low in ("user/password", "userpass", "user_password", "user"):
+        return "user/password"
+    return s
+
+
+def _normalize_modbus_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    address = (params.get("address") or params.get("host") or params.get("ip") or "").strip()
+    port = _to_int(params.get("port"))
+    unit_id = _to_int(params.get("unitId") or params.get("unit_id") or params.get("unitID") or params.get("unit"))
+    mode = (params.get("mode") or "").strip() or None
+    timeout_ms = _to_int(params.get("timeoutMs") or params.get("timeout_ms") or params.get("timeout"))
+    retries = _to_int(params.get("retries"))
+    out: Dict[str, Any] = {}
+    if address:
+        out["address"] = address
+    if port is not None:
+        out["port"] = port
+    if unit_id is not None:
+        out["unitId"] = unit_id
+    if mode:
+        out["mode"] = mode
+    if timeout_ms is not None:
+        out["timeoutMs"] = timeout_ms
+    if retries is not None:
+        out["retries"] = retries
+    return out
+
+
+def _normalize_opcua_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    endpoint = (params.get("endpoint") or "").strip()
+    auth = _canonical_auth(params.get("auth"))
+    out: Dict[str, Any] = {}
+    if endpoint:
+        out["endpoint"] = endpoint
+    if auth:
+        out["auth"] = auth
+    return out
+
+
+def _modbus_params_from_row(row: sqlite3.Row) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    if row["address"]:
+        out["address"] = row["address"]
+    if row["port"] is not None:
+        out["port"] = row["port"]
+    if row["unit_id"] is not None:
+        out["unitId"] = row["unit_id"]
+    if row["mode"]:
+        out["mode"] = row["mode"]
+    if row["timeout_ms"] is not None:
+        out["timeoutMs"] = row["timeout_ms"]
+    if row["retries"] is not None:
+        out["retries"] = row["retries"]
+    return out
+
+
+def _opcua_params_from_row(row: sqlite3.Row) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    if row["endpoint"]:
+        out["endpoint"] = row["endpoint"]
+    if row["auth"]:
+        out["auth"] = row["auth"]
+    return out
+
+
+def _load_protocol_maps(c: sqlite3.Connection) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    modbus: Dict[str, Dict[str, Any]] = {}
+    opcua: Dict[str, Dict[str, Any]] = {}
+    try:
+        rs = c.execute(
+            "SELECT device_id,address,port,unit_id,mode,timeout_ms,retries FROM protocol_type_modbus"
+        ).fetchall()
+        for r in rs:
+            modbus[r["device_id"]] = _modbus_params_from_row(r)
+    except Exception:
+        pass
+    try:
+        rs = c.execute(
+            "SELECT device_id,endpoint,auth FROM protocol_type_opcua"
+        ).fetchall()
+        for r in rs:
+            opcua[r["device_id"]] = _opcua_params_from_row(r)
+    except Exception:
+        pass
+    return modbus, opcua
+
+
+def _upsert_modbus_params(c: sqlite3.Connection, dev_id: str, params: Dict[str, Any]) -> None:
+    norm = _normalize_modbus_params(params)
+    c.execute(
+        """
+        INSERT OR REPLACE INTO protocol_type_modbus
+        (device_id,address,port,unit_id,mode,timeout_ms,retries)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (
+            dev_id,
+            norm.get("address"),
+            norm.get("port"),
+            norm.get("unitId"),
+            norm.get("mode"),
+            norm.get("timeoutMs"),
+            norm.get("retries"),
+        ),
+    )
+
+
+def _upsert_opcua_params(c: sqlite3.Connection, dev_id: str, params: Dict[str, Any]) -> None:
+    norm = _normalize_opcua_params(params)
+    c.execute(
+        """
+        INSERT OR REPLACE INTO protocol_type_opcua
+        (device_id,endpoint,auth)
+        VALUES (?,?,?)
+        """,
+        (
+            dev_id,
+            norm.get("endpoint"),
+            norm.get("auth"),
+        ),
+    )
+
+
+def _upsert_device_protocol(c: sqlite3.Connection, dev_id: str, protocol: str, params: Dict[str, Any]) -> None:
+    proto = (protocol or "").lower()
+    if proto == "modbus":
+        _upsert_modbus_params(c, dev_id, params)
+    elif proto in ("opcua", "opc_ua"):
+        _upsert_opcua_params(c, dev_id, params)
+
+
 # ---------- Devices ----------
 def load_devices() -> List[Dict[str, Any]]:
     with _conn() as c:
+        cols = _device_columns(c)
+        sel = ["id", "name", "protocol", "status", "latency_ms", "last_error", "auto_reconnect"]
+        if "params_json" in cols:
+            sel.insert(3, "params_json")
         rs = c.execute(
-            "SELECT id,name,protocol,params_json,status,latency_ms,last_error,auto_reconnect FROM app_devices ORDER BY name"
+            f"SELECT {', '.join(sel)} FROM app_devices ORDER BY name"
         ).fetchall()
+        modbus_map, opcua_map = _load_protocol_maps(c)
         out: List[Dict[str, Any]] = []
         for r in rs:
-            params = _params_load(r["params_json"]) if r["params_json"] else {}
+            proto = (r["protocol"] or "").lower()
+            params = {}
+            if proto == "modbus":
+                params = modbus_map.get(r["id"]) or {}
+            elif proto in ("opcua", "opc_ua"):
+                params = opcua_map.get(r["id"]) or {}
+            if not params and "params_json" in cols:
+                legacy = _params_load(r["params_json"]) if r["params_json"] else {}
+                if legacy:
+                    if proto == "modbus":
+                        params = _normalize_modbus_params(legacy)
+                    elif proto in ("opcua", "opc_ua"):
+                        params = _normalize_opcua_params(legacy)
+                    if params:
+                        _upsert_device_protocol(c, r["id"], proto, params)
             out.append({
                 "id": r["id"],
                 "name": r["name"],
@@ -715,25 +865,24 @@ def upsert_device(dev: Dict[str, Any]) -> Dict[str, Any]:
         if row:
             # Return existing
             existing = c.execute(
-                "SELECT id,name,protocol,params_json,status,latency_ms,last_error,auto_reconnect FROM app_devices WHERE id=?",
+                "SELECT id,name,protocol,status,latency_ms,last_error,auto_reconnect FROM app_devices WHERE id=?",
                 (row["id"],),
             ).fetchone()
             if existing:
                 return {"id": existing["id"], "name": existing["name"], "protocol": existing["protocol"], "params": dev.get("params") or {}, "status": existing["status"], "latencyMs": existing["latency_ms"], "lastError": existing["last_error"], "autoReconnect": bool(existing.get("auto_reconnect", 1)) if hasattr(existing, 'get') else True}
-        params_blob = _params_dump(dev.get("params") or {})
         c.execute(
-            "INSERT OR REPLACE INTO app_devices (id,name,protocol,params_json,status,latency_ms,last_error,auto_reconnect) VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO app_devices (id,name,protocol,status,latency_ms,last_error,auto_reconnect) VALUES (?,?,?,?,?,?,?)",
             (
                 dev["id"],
                 dev.get("name"),
                 dev.get("protocol"),
-                params_blob,
                 dev.get("status"),
                 dev.get("latencyMs"),
                 dev.get("lastError"),
                 1 if dev.get("autoReconnect", True) else 0,
             ),
         )
+        _upsert_device_protocol(c, dev["id"], dev.get("protocol") or "", dev.get("params") or {})
         return dev
 
 
@@ -869,38 +1018,8 @@ def update_device_metadata(dev_id: str, *, name: Optional[str] = None, auto_reco
 def delete_device(dev_id: str) -> None:
     with _conn() as c:
         c.execute("DELETE FROM app_devices WHERE id=?", (dev_id,))
-
-
-# ---------- Secrets rekey (DPAPI scope alignment) ----------
-def rekey_all_device_params() -> int:
-    """Re-encode stored device params using current DPAPI scope.
-    This aligns plaintext or user-scoped blobs to machine scope when
-    AGENT_DPAPI_MACHINE=1 (service context). Returns number of rows updated.
-    """
-    try:
-        with _conn() as c:
-            rs = c.execute("SELECT id, params_json FROM app_devices").fetchall()
-            updated = 0
-            for r in rs:
-                try:
-                    dev_id = r["id"]
-                    current = r["params_json"]
-                    # Load (supports ENCv1 and plain JSON)
-                    params = _params_load(current)
-                    # Dump using current DPAPI flags
-                    fresh = _params_dump(params)
-                    if fresh != current:
-                        c.execute(
-                            "UPDATE app_devices SET params_json=? WHERE id=?",
-                            (fresh, dev_id),
-                        )
-                        updated += 1
-                except Exception:
-                    # Best-effort; continue scanning
-                    pass
-            return updated
-    except Exception:
-        return 0
+        c.execute("DELETE FROM protocol_type_modbus WHERE device_id=?", (dev_id,))
+        c.execute("DELETE FROM protocol_type_opcua WHERE device_id=?", (dev_id,))
 
 
 # ---------- Job run history ----------

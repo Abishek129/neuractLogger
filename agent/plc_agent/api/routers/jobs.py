@@ -33,9 +33,13 @@ def _db_engine_for_table(table_id: str):
     url = "sqlite:///mydatabase.db"
     if target_id:
         target = store.get_db_target(target_id)
-        if target and target.get("provider") == "sqlite":
+        if target:
+            provider = (target.get("provider") or "").lower()
             conn = target.get("conn") or ":memory:"
-            url = f"sqlite:///{conn}" if not str(conn).startswith("sqlite:") else conn
+            if provider == "sqlite":
+                url = f"sqlite:///{conn}" if not str(conn).startswith("sqlite:") else conn
+            elif provider in ("postgres", "postgresql", "psycopg2", "mysql", "sqlserver", "mssql"):
+                url = str(conn)
     cache = getattr(_thread_local, "engine_cache", None)
     if cache is None:
         cache = {}
@@ -84,7 +88,7 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
     proto = (dev.get("protocol") or "").lower()
     params = dev.get("params") or {}
     values: Dict[str, Any] = {}
-    if proto == "opcua":
+    if proto in ("opcua", "opc_ua"):
         try:
             import opcua  # type: ignore
             _ = opcua
@@ -129,10 +133,62 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
             _drop_opcua_client(endpoint)
             raise
     elif proto == "modbus":
-        # TODO: Implement TCP/RTU reads. For now, stub None values.
-        for field, spec in rows.items():
-            # For now we do not implement pyModbus here; return None
-            values[field] = None
+        try:
+            from pymodbus.client import ModbusTcpClient  # type: ignore
+            _ = ModbusTcpClient  # Verify import
+        except Exception as e:
+            raise RuntimeError(f"PYMODBUS_PKG_MISSING: {e}")
+
+        host = (params.get("address") or params.get("host") or params.get("ip") or "").strip()
+        port = int(params.get("port") or 502)
+        unit_id = int(params.get("unitId") or params.get("unit_id") or 1)  # Default unit ID = 1
+
+        if not host:
+            raise RuntimeError("MODBUS_HOST_REQUIRED")
+
+        try:
+            client = _get_modbus_client(host, port, unit_id)
+
+            for field, spec in rows.items():
+                # Filter by protocol
+                if (spec.get("protocol") or "").lower() != "modbus":
+                    continue
+
+                address = spec.get("address")
+                if not address:
+                    continue
+
+                data_type = spec.get("dataType") or "float"
+                byte_order = spec.get("byteOrder") or "ABCD"  # Default big-endian
+
+                try:
+                    # Read value
+                    val = _read_modbus_value(
+                        client,
+                        address=address,
+                        data_type=data_type,
+                        byte_order=byte_order,
+                        unit_id=unit_id
+                    )
+
+                    # Apply scale transformation if present (but not to booleans)
+                    sc = spec.get("scale")
+                    try:
+                        if sc is not None and isinstance(val, (int, float)) and not isinstance(val, bool):
+                            val = float(val) * float(sc)
+                    except Exception:
+                        pass
+
+                    values[field] = val
+
+                except Exception as e:
+                    log.warning("Modbus read failed field=%s address=%s err=%s", field, address, e)
+                    values[field] = None
+
+        except Exception as e:
+            log.error("Modbus connect/read failed host=%s port=%s err=%s", host, port, e)
+            _drop_modbus_client(host, port)
+            raise
     else:
         raise RuntimeError("PROTOCOL_NOT_SUPPORTED")
     return values
@@ -179,6 +235,9 @@ _job_cooldowns: Dict[str, Dict[str, float]] = {}
 _opcua_clients: Dict[str, Any] = {}
 _opcua_nodes: Dict[Tuple[str, str], Any] = {}
 _opcua_lock = threading.RLock()
+# Modbus client pooling infrastructure
+_modbus_clients: Dict[Tuple[str, int], Any] = {}
+_modbus_lock = threading.RLock()
 _thread_cpu_cache: Dict[int, float] = {}
 _thread_cpu_cache_ts = 0.0
 _thread_cpu_cache_lock = threading.Lock()
@@ -213,6 +272,240 @@ def _drop_opcua_client(endpoint: str) -> None:
             client.disconnect()
         except Exception:
             pass
+
+
+def _get_modbus_client(host: str, port: int, unit_id: int = 1):
+    """Get or create a pooled Modbus TCP client.
+
+    Args:
+        host: IP address or hostname
+        port: TCP port (default 502)
+        unit_id: Modbus unit/slave ID (default 1)
+
+    Returns:
+        ModbusTcpClient instance (connected)
+    """
+    with _modbus_lock:
+        key = (host, port)
+        client = _modbus_clients.get(key)
+
+    if client:
+        # Verify connection is still alive
+        try:
+            if client.is_socket_open():
+                return client
+            else:
+                # Stale connection, reconnect
+                with _modbus_lock:
+                    _modbus_clients.pop(key, None)
+        except Exception:
+            with _modbus_lock:
+                _modbus_clients.pop(key, None)
+
+    # Create new connection
+    from pymodbus.client import ModbusTcpClient  # type: ignore
+
+    client = ModbusTcpClient(host=host, port=port, timeout=3)
+    if not client.connect():
+        raise RuntimeError(f"MODBUS_CONNECT_FAILED: {host}:{port}")
+
+    with _modbus_lock:
+        _modbus_clients[key] = client
+
+    return client
+
+
+def _drop_modbus_client(host: str, port: int) -> None:
+    """Remove and close a Modbus client from the pool.
+
+    Args:
+        host: IP address or hostname
+        port: TCP port
+    """
+    with _modbus_lock:
+        key = (host, port)
+        client = _modbus_clients.pop(key, None)
+
+    if client:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
+def _reset_modbus_client(client) -> None:
+    """Drop a pooled Modbus client (best-effort) so a fresh connection is used."""
+    try:
+        cp = getattr(client, "comm_params", None)
+        host = getattr(cp, "host", None)
+        port = getattr(cp, "port", None)
+        if host and port:
+            _drop_modbus_client(str(host), int(port))
+            return
+    except Exception:
+        pass
+    try:
+        client.close()
+    except Exception:
+        pass
+
+
+def _parse_modbus_address(address_str: str) -> Tuple[str, int]:
+    """Parse Modbus address string into register type and offset.
+
+    Address ranges:
+    - 40001-49999: Holding Registers (read/write, 16-bit)
+    - 30001-39999: Input Registers (read-only, 16-bit)
+    - 10001-19999: Coils (read/write, 1-bit boolean)
+    - 0-9999: Discrete Inputs (read-only, 1-bit boolean)
+
+    Args:
+        address_str: String like "40001" or "30050"
+
+    Returns:
+        Tuple of (register_type, offset) where:
+        - register_type: "holding", "input", "coil", "discrete"
+        - offset: zero-based offset
+
+    Raises:
+        ValueError: If address is invalid
+    """
+    try:
+        address = int(address_str)
+    except (ValueError, TypeError):
+        raise ValueError(f"INVALID_ADDRESS: {address_str}")
+
+    if address >= 40001 and address <= 49999:
+        return ("holding", address - 40001)
+    elif address >= 30001 and address <= 39999:
+        return ("input", address - 30001)
+    elif address >= 10001 and address <= 19999:
+        return ("coil", address - 10001)
+    elif address >= 0 and address <= 9999:
+        return ("discrete", address)
+    else:
+        raise ValueError(f"ADDRESS_OUT_OF_RANGE: {address}")
+
+
+def _read_modbus_value(client, address: str, data_type: str, byte_order: str = "ABCD", unit_id: int = 1):
+    """Read a single value from Modbus device.
+
+    Args:
+        client: ModbusTcpClient instance
+        address: Modbus address string (e.g., "40001")
+        data_type: "float", "int", "bool", "string"
+        byte_order: Byte order for multi-register reads - "ABCD", "DCBA", "BADC", "CDAB"
+        unit_id: Modbus unit/slave ID (default 1)
+
+    Returns:
+        Parsed value or None on error
+    """
+    try:
+        reg_type, offset = _parse_modbus_address(address)
+    except ValueError as e:
+        log.warning(f"Modbus address parse error: {e}")
+        return None
+
+    # Determine register count based on data type
+    if data_type == "float":
+        count = 2  # 32-bit float = 2 registers
+    elif data_type == "int":
+        count = 1  # 16-bit int = 1 register
+    elif data_type == "bool":
+        count = 1  # 1 bit
+    elif data_type == "string":
+        count = 16  # Assume 16 registers = 32 characters
+    else:
+        log.warning(f"Unknown data type: {data_type}")
+        return None
+
+    for attempt in range(2):
+        try:
+            # Read based on register type (pymodbus 3.x uses 'device_id' parameter)
+            if reg_type == "holding":
+                result = client.read_holding_registers(offset, count=count, device_id=unit_id)
+            elif reg_type == "input":
+                result = client.read_input_registers(offset, count=count, device_id=unit_id)
+            elif reg_type == "coil":
+                result = client.read_coils(offset, count=1, device_id=unit_id)
+            elif reg_type == "discrete":
+                result = client.read_discrete_inputs(offset, count=1, device_id=unit_id)
+            else:
+                return None
+
+            # Check for errors
+            if hasattr(result, 'isError') and result.isError():
+                if attempt == 0:
+                    _reset_modbus_client(client)
+                    continue
+                log.warning(f"Modbus read error for address {address}")
+                return None
+
+            # Parse value based on data type
+            if data_type == "bool":
+                # Coils and discrete inputs
+                if hasattr(result, 'bits'):
+                    return bool(result.bits[0])
+                return None
+
+            if data_type == "int":
+                # Single 16-bit register
+                if hasattr(result, 'registers') and len(result.registers) >= 1:
+                    val = result.registers[0]
+                    # Handle signed 16-bit integer
+                    if val > 32767:
+                        val = val - 65536
+                    return int(val)
+                return None
+
+            if data_type == "float":
+                # Two 16-bit registers to form 32-bit float
+                if hasattr(result, 'registers') and len(result.registers) >= 2:
+                    import struct
+
+                    reg1 = result.registers[0]
+                    reg2 = result.registers[1]
+
+                    # Apply byte order to convert two 16-bit registers to 32-bit float
+                    if byte_order == "ABCD":  # Big-endian (network order)
+                        # reg1 = high word, reg2 = low word
+                        bytes_data = struct.pack('>HH', reg1, reg2)
+                    elif byte_order == "DCBA":  # Little-endian
+                        # Reverse everything
+                        bytes_data = struct.pack('<HH', reg2, reg1)
+                    elif byte_order == "BADC":  # Mid-big (byte swap within words)
+                        # Swap bytes within each register
+                        bytes_data = struct.pack('>HH', reg2, reg1)
+                    elif byte_order == "CDAB":  # Mid-little (word swap)
+                        # Swap word order but keep byte order
+                        bytes_data = struct.pack('<HH', reg1, reg2)
+                    else:
+                        # Default to big-endian
+                        bytes_data = struct.pack('>HH', reg1, reg2)
+
+                    # Unpack as float
+                    return float(struct.unpack('>f', bytes_data)[0])
+                return None
+
+            if data_type == "string":
+                # Multiple registers interpreted as ASCII string
+                if hasattr(result, 'registers'):
+                    chars = []
+                    for reg in result.registers:
+                        # Each register is 2 bytes (high byte, low byte)
+                        chars.append(chr((reg >> 8) & 0xFF))
+                        chars.append(chr(reg & 0xFF))
+                    # Strip null terminators
+                    return ''.join(chars).rstrip('\x00')
+                return None
+        except Exception as e:
+            if attempt == 0:
+                _reset_modbus_client(client)
+                continue
+            log.warning(f"Modbus read exception for address {address}: {e}")
+            return None
+
+    return None
 
 
 def _percentile_ms(samples: List[float], pct: float) -> Optional[float]:

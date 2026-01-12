@@ -484,15 +484,19 @@ export function TablesMapping({ onProceed }) {
                       <span className="hint" style={{ color: '#ef4444' }}>DEVICE_NOT_BOUND</span>
                     )}
                   </div>
-                  <div className="grid col-6 header">
-                    <div>Field</div><div>Type</div><div>Address/Node</div><div>Data type</div><div>Scale</div><div>Deadband</div>
+                  <div className="grid col-7 header">
+                    <div>Field</div><div>Type</div><div>Address/Node</div><div>Data type</div><div>Byte Order</div><div>Scale</div><div>Deadband</div>
                   </div>
                   {rows.map(r => {
                     const dev = devices.find(d=>d.id===table?.deviceId)
                     const proto = dev?.protocol
                     const isOpc = proto === 'opcua'
+                    const isModbus = proto === 'modbus'
+                    const isFloat = r.map.dataType === 'float'
+                    const showByteOrder = isModbus && isFloat
+
                     return (
-                      <div key={r.key} className="grid col-6">
+                      <div key={r.key} className="grid col-7">
                         <div>{r.key}</div>
                         <div>{r.type}</div>
                         <input value={r.map.address||''} onChange={e=>upsertRow(r.key,{ address:e.target.value })} placeholder={isOpc?'ns=2;s=...':'40001'} />
@@ -503,6 +507,16 @@ export function TablesMapping({ onProceed }) {
                           <option value="bool">bool</option>
                           <option value="string">string</option>
                         </select>
+                        {showByteOrder ? (
+                          <select value={r.map.byteOrder||'ABCD'} onChange={e=>upsertRow(r.key,{ byteOrder:e.target.value })}>
+                            <option value="ABCD">Big-endian (ABCD)</option>
+                            <option value="DCBA">Little-endian (DCBA)</option>
+                            <option value="BADC">Mid-big (BADC)</option>
+                            <option value="CDAB">Mid-little (CDAB)</option>
+                          </select>
+                        ) : (
+                          <div style={{ color: '#9ca3af' }}>—</div>
+                        )}
                         <input type="number" value={r.map.scale??1} onChange={e=>upsertRow(r.key,{ scale:Number(e.target.value)||1 })} />
                         <input type="number" value={r.map.deadband??0} onChange={e=>upsertRow(r.key,{ deadband:Number(e.target.value)||0 })} />
                       </div>

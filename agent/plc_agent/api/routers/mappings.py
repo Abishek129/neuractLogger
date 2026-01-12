@@ -109,6 +109,11 @@ def validate_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             if proto != "opcua":
                 if r.get("dataType") not in ("float", "int", "bool", "string"):
                     problems.append({"field": k, "code": "MAPPING_TYPE_MISMATCH"})
+            # Validate byte order for Modbus float values
+            if proto == "modbus" and r.get("dataType") == "float":
+                byte_order = r.get("byteOrder") or "ABCD"
+                if byte_order not in ("ABCD", "DCBA", "BADC", "CDAB"):
+                    problems.append({"field": k, "code": "INVALID_BYTE_ORDER"})
             # Live-read check (best-effort)
             if device and not _can_read_field(device, r):
                 problems.append({"field": k, "code": "TAG_UNREADABLE"})
@@ -146,7 +151,7 @@ def validate_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 def _can_read_field(device: Dict[str, Any], row: Dict[str, Any]) -> bool:
     try:
         proto = (row.get("protocol") or device.get("protocol") or "").lower()
-        if proto == "opcua":
+        if proto in ("opcua", "opc_ua"):
             return _opcua_can_read(device, row)
         if proto == "modbus":
             return _modbus_can_read(device, row)
@@ -195,8 +200,8 @@ def _modbus_can_read(device: Dict[str, Any], row: Dict[str, Any]) -> bool:
         except Exception:
             return False
         params = device.get("params") or {}
-        host = (params.get("host") or params.get("ip") or "").strip()
-        port = int(params.get("port", 502))
+        host = (params.get("address") or params.get("host") or params.get("ip") or "").strip()
+        port = int(params.get("port") or 502)
         if not host:
             return False
         addr_raw = str(row.get("address") or "").strip()
@@ -362,6 +367,7 @@ def _ensure_mapping_table(engine, table_name: Optional[str] = None) -> None:
         "scale REAL,"
         "deadband REAL,"
         "device_id TEXT,"
+        "byte_order TEXT,"
         "PRIMARY KEY (table_name, field_key)"
         ")"
     )
@@ -397,6 +403,11 @@ def _ensure_mapping_table_columns(engine, table_name: str) -> None:
             if "device_id" not in names:
                 try:
                     conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN device_id TEXT"))
+                except Exception:
+                    pass
+            if "byte_order" not in names:
+                try:
+                    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN byte_order TEXT"))
                 except Exception:
                     pass
     except Exception:
@@ -444,8 +455,8 @@ def _save_mapping_to_user_db(table: Dict[str, Any], rows: Dict[str, Dict[str, An
             try:
                 conn.execute(
                     text(
-                        f"INSERT OR REPLACE INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id)"
-                        " VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev)"
+                        f"INSERT OR REPLACE INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id,byte_order)"
+                        " VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev,:bo)"
                     ),
                     {
                         "t": t_ident["name"],
@@ -456,6 +467,7 @@ def _save_mapping_to_user_db(table: Dict[str, Any], rows: Dict[str, Dict[str, An
                         "s": v.get("scale"),
                         "d": v.get("deadband"),
                         "dev": device_id,
+                        "bo": v.get("byteOrder"),
                     },
                 )
             except Exception:
@@ -464,8 +476,8 @@ def _save_mapping_to_user_db(table: Dict[str, Any], rows: Dict[str, Dict[str, An
                     conn.execute(text(f"DELETE FROM {m_table} WHERE table_name=:t AND field_key=:k"), {"t": t_ident["name"], "k": k})
                     conn.execute(
                         text(
-                            f"INSERT INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id)"
-                            " VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev)"
+                            f"INSERT INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id,byte_order)"
+                            " VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev,:bo)"
                         ),
                         {
                             "t": t_ident["name"],
@@ -476,6 +488,7 @@ def _save_mapping_to_user_db(table: Dict[str, Any], rows: Dict[str, Dict[str, An
                             "s": v.get("scale"),
                             "d": v.get("deadband"),
                             "dev": device_id,
+                            "bo": v.get("byteOrder"),
                         },
                     )
                 except Exception:
@@ -523,7 +536,7 @@ def _load_mapping_from_user_db(table: Dict[str, Any]) -> Optional[Dict[str, Any]
             # Try logical name first
             try:
                 rows = conn.execute(
-                    text(f"SELECT field_key,protocol,address,data_type,scale,deadband,device_id FROM {m_table} WHERE table_name=:t"),
+                    text(f"SELECT field_key,protocol,address,data_type,scale,deadband,device_id,byte_order FROM {m_table} WHERE table_name=:t"),
                     {"t": logical},
                 ).fetchall()
                 try:
@@ -535,7 +548,7 @@ def _load_mapping_from_user_db(table: Dict[str, Any]) -> Optional[Dict[str, Any]
             if not rows and prefixed != logical:
                 try:
                     rows = conn.execute(
-                        text(f"SELECT field_key,protocol,address,data_type,scale,deadband,device_id FROM {m_table} WHERE table_name=:t"),
+                        text(f"SELECT field_key,protocol,address,data_type,scale,deadband,device_id,byte_order FROM {m_table} WHERE table_name=:t"),
                         {"t": prefixed},
                     ).fetchall()
                     try:
@@ -581,6 +594,7 @@ def _load_mapping_from_user_db(table: Dict[str, Any]) -> Optional[Dict[str, Any]
                 "dataType": _get(r, "data_type", 3),
                 "scale": _get(r, "scale", 4),
                 "deadband": _get(r, "deadband", 5),
+                "byteOrder": _get(r, "byte_order", 7),
             }
         try:
             log.info(f"mappings._load: table={table.get('id')} name={table.get('name')} target={table.get('dbTargetId')} rows={len(out['rows'])} dev={out.get('deviceId')}")

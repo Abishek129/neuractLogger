@@ -101,7 +101,7 @@ def test_modbus(params: Dict[str, Any]) -> Dict[str, Any]:
         ok = client.connect()
         if not ok:
             return {"ok": False, "protocol": "modbus", "message": "TCP_CONNECT_FAILED"}
-        rr = client.read_holding_registers(address=address, count=count, unit=unit)
+        rr = client.read_holding_registers(address=address, count=count, device_id=unit)
         client.close()
         dt = int((time.perf_counter() - t0) * 1000)
         if hasattr(rr, 'isError') and rr.isError():

@@ -25,6 +25,63 @@ def _ensure_store_logger(logger: logging.Logger) -> None:
         pass
 
 
+def _to_int(value: Any) -> Optional[int]:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _canonical_auth(value: Any) -> str:
+    s = (value or "").strip()
+    if not s:
+        return "Anonymous"
+    low = s.lower()
+    if low in ("anonymous", "anon", "none"):
+        return "Anonymous"
+    if low in ("user/password", "userpass", "user_password", "user"):
+        return "user/password"
+    return s
+
+
+def _normalize_device_params(protocol: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    proto = (protocol or "").lower()
+    params = params or {}
+    if proto == "modbus":
+        address = (params.get("address") or params.get("host") or params.get("ip") or "").strip()
+        port = _to_int(params.get("port"))
+        unit_id = _to_int(params.get("unitId") or params.get("unit_id") or params.get("unitID") or params.get("unit"))
+        mode = (params.get("mode") or "").strip() or None
+        timeout_ms = _to_int(params.get("timeoutMs") or params.get("timeout_ms") or params.get("timeout"))
+        retries = _to_int(params.get("retries"))
+        out: Dict[str, Any] = {}
+        if address:
+            out["address"] = address
+        if port is not None:
+            out["port"] = port
+        if unit_id is not None:
+            out["unitId"] = unit_id
+        if mode:
+            out["mode"] = mode
+        if timeout_ms is not None:
+            out["timeoutMs"] = timeout_ms
+        if retries is not None:
+            out["retries"] = retries
+        return out
+    if proto in ("opcua", "opc_ua"):
+        endpoint = (params.get("endpoint") or "").strip()
+        auth = _canonical_auth(params.get("auth"))
+        out: Dict[str, Any] = {}
+        if endpoint:
+            out["endpoint"] = endpoint
+        if auth:
+            out["auth"] = auth
+        return out
+    return dict(params)
+
+
 class Store:
     _inst: Optional["Store"] = None
     _lock = threading.Lock()
@@ -437,7 +494,7 @@ class Store:
         name = (payload.get("name") or "").strip() or f"Device-{int(time.time()*1000)}"
         protocol = (payload.get("protocol") or "").strip() or "modbus"
         # params may include secrets like password; store but redact on read
-        params = payload.get("params") or {}
+        params = _normalize_device_params(protocol, payload.get("params") or {})
         dev_id = payload.get("id") or f"dev_{int(time.time()*1000)}"
         auto_reconnect = bool(payload.get("autoReconnect", True))
         item = {
@@ -725,7 +782,8 @@ class Store:
 
     # -------------- Device reconnect loop --------------
     def test_device_params(self, protocol: str, params: Dict[str, Any]) -> (bool, int, Optional[str]):
-        return self._attempt_connect({"protocol": protocol, "params": params or {}})
+        norm = _normalize_device_params(protocol, params or {})
+        return self._attempt_connect({"protocol": protocol, "params": norm})
 
     def test_device_connection(self, dev_id: str) -> (bool, int, Optional[str]):
         with self._mtx:
@@ -798,15 +856,22 @@ class Store:
         t0 = time.perf_counter()
         try:
             if proto == "modbus":
-                host = (params.get("host") or params.get("ip") or "").strip()
-                port = int(params.get("port", 502))
+                host = (params.get("address") or params.get("host") or params.get("ip") or "").strip()
+                port = int(params.get("port") or 502)
                 if not host:
                     return False, 0, "HOST_REQUIRED"
+                timeout_ms = params.get("timeoutMs") or params.get("timeout_ms") or params.get("timeout")
+                timeout = None
+                try:
+                    if timeout_ms is not None:
+                        timeout = float(timeout_ms) / 1000.0
+                except Exception:
+                    timeout = None
                 try:
                     from pymodbus.client import ModbusTcpClient  # type: ignore
                 except Exception:
                     return False, 0, "PYMODBUS_MISSING"
-                client = ModbusTcpClient(host=host, port=port)
+                client = ModbusTcpClient(host=host, port=port, timeout=timeout) if timeout is not None else ModbusTcpClient(host=host, port=port)
                 ok = False
                 try:
                     ok = client.connect()
@@ -817,7 +882,7 @@ class Store:
                         pass
                 dt = int((time.perf_counter() - t0) * 1000)
                 return (True, dt, None) if ok else (False, dt, "TCP_CONNECT_FAILED")
-            elif proto == "opcua":
+            elif proto in ("opcua", "opc_ua"):
                 ep = (params.get("endpoint") or "").strip()
                 if "0.0.0.0" in ep:
                     ep = ep.replace("0.0.0.0", "127.0.0.1")
