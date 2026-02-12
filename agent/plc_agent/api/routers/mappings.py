@@ -536,7 +536,7 @@ def _load_mapping_from_user_db(table: Dict[str, Any]) -> Optional[Dict[str, Any]
             # Try logical name first
             try:
                 rows = conn.execute(
-                    text(f"SELECT field_key,protocol,address,data_type,scale,deadband,device_id FROM {m_table} WHERE table_name=:t"),
+                    text(f"SELECT field_key,protocol,address,data_type,scale,deadband,device_id,unit_id,encoding FROM {m_table} WHERE table_name=:t"),
                     {"t": logical},
                 ).fetchall()
                 try:
@@ -548,7 +548,7 @@ def _load_mapping_from_user_db(table: Dict[str, Any]) -> Optional[Dict[str, Any]
             if not rows and prefixed != logical:
                 try:
                     rows = conn.execute(
-                        text(f"SELECT field_key,protocol,address,data_type,scale,deadband,device_id FROM {m_table} WHERE table_name=:t"),
+                        text(f"SELECT field_key,protocol,address,data_type,scale,deadband,device_id,unit_id,encoding FROM {m_table} WHERE table_name=:t"),
                         {"t": prefixed},
                     ).fetchall()
                     try:
@@ -594,6 +594,8 @@ def _load_mapping_from_user_db(table: Dict[str, Any]) -> Optional[Dict[str, Any]
                 "dataType": _get(r, "data_type", 3),
                 "scale": _get(r, "scale", 4),
                 "deadband": _get(r, "deadband", 5),
+                "unitId": _get(r, "unit_id", 7),
+                "encoding": _get(r, "encoding", 8),
             }
         try:
             log.info(f"mappings._load: table={table.get('id')} name={table.get('name')} target={table.get('dbTargetId')} rows={len(out['rows'])} dev={out.get('deviceId')}")

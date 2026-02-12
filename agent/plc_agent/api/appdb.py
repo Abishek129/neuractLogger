@@ -339,6 +339,20 @@ def init() -> None:
                 """
             )
         )
+        c.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS app_notifications (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL DEFAULT 'job',
+                    message TEXT NOT NULL,
+                    "user" TEXT NOT NULL,
+                    read BOOLEAN NOT NULL DEFAULT FALSE,
+                    time TEXT NOT NULL
+                )
+                """
+            )
+        )
 
 # ---------- Schemas ----------
 def load_schemas() -> List[Dict[str, Any]]:
@@ -1101,3 +1115,33 @@ def load_job_runs(job_id: str, frm: Optional[str] = None, to: Optional[str] = No
     sql += " ORDER BY id DESC LIMIT 500"
     with _conn() as c:
         return _fetchall(c, sql, params)
+
+
+# ---------- Notifications ----------
+
+NOTIFICATION_TYPES = {"job", "trigger", "migration_failed", "migration_success", "slow_query", "performance_summary"}
+
+
+def create_notification(notif_type: str, message: str, user: str) -> Dict[str, Any]:
+    import uuid
+    from datetime import datetime, timezone
+    notif_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as c:
+        c.execute(
+            text(
+                'INSERT INTO app_notifications (id, type, message, "user", read, time) '
+                "VALUES (:id, :type, :message, :user, :read, :time)"
+            ),
+            {"id": notif_id, "type": notif_type, "message": message, "user": user, "read": False, "time": now},
+        )
+    return {"id": notif_id, "type": notif_type, "message": message, "user": user, "read": False, "time": now}
+
+
+def list_notifications(user_uuid: str) -> List[Dict[str, Any]]:
+    with _conn() as c:
+        return _fetchall(
+            c,
+            'SELECT id, type, message, read, time FROM app_notifications WHERE "user" = :user ORDER BY time DESC',
+            {"user": user_uuid},
+        )

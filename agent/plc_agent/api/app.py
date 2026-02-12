@@ -17,7 +17,10 @@ from .routers import auth as auth_router
 from .routers import tables as tables_router
 from .routers import mappings as mappings_router
 from .routers import devices as devices_router
-from .security import auth_middleware, get_or_create_token
+from .routers import notifications as notifications_router
+from .routers import ws_notifications as ws_notifications_router
+from fastapi import Depends
+from .permissions import require_safe_or_write
 from .store import Store
 from ..metrics import metrics as METRICS
 
@@ -42,8 +45,7 @@ def create_app() -> FastAPI:
             print("File logging setup warning:", _e)
     except Exception:
         pass
-    # Register token auth middleware
-    app.middleware("http")(auth_middleware())
+    # Auth is handled via per-router Depends (Keycloak JWT)
     # Tech stack verification note
     try:
         import sys, platform
@@ -93,23 +95,30 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Routers
+    # Public routers (no auth — matches Django AllowAny)
     app.include_router(health.router)
     app.include_router(auth_router.router)
     app.include_router(schemas.router)
-    app.include_router(jobs.router)
-    app.include_router(jobs2.router)
-    app.include_router(networking.router)
-    app.include_router(storage.router)
-    app.include_router(devices_router.router)
     app.include_router(tables_router.router)
-    app.include_router(mappings_router.router)
-    app.include_router(system_router.router)
-    app.include_router(db_metrics_router.router)
-    app.include_router(reports_router.router)
-    app.include_router(debug_router.router)
-    # Ensure token exists early
-    get_or_create_token()
+    app.include_router(devices_router.router)
+    # Unprotected legacy router
+    app.include_router(jobs2.router)
+    # Protected routers (Keycloak JWT + role-based: IsNeuractAdminForUnsafeMethods)
+    _protected = [
+        jobs.router,
+        networking.router,
+        storage.router,
+        mappings_router.router,
+        system_router.router,
+        db_metrics_router.router,
+        reports_router.router,
+        debug_router.router,
+    ]
+    for r in _protected:
+        app.include_router(r, dependencies=[Depends(require_safe_or_write)])
+    # Notification routers (auth handled inside each endpoint/websocket)
+    app.include_router(notifications_router.router)
+    app.include_router(ws_notifications_router.router)
     # Align DPAPI scope: rekey secrets under current context (machine scope for service)
     try:
         from .appdb import rekey_all_device_params as _rekey

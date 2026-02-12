@@ -3,6 +3,12 @@ import json
 import socket
 import sys
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env from the agent directory (next to run_agent.py)
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
 from plc_agent.api.server import run
 
 def _choose_port(preferred: int, host: str = "127.0.0.1") -> int:
@@ -34,9 +40,9 @@ def _choose_port(preferred: int, host: str = "127.0.0.1") -> int:
         return s.getsockname()[1]
 
 
-def _write_lockfile(port: int, token: str) -> None:
+def _write_lockfile(port: int) -> None:
     pid = os.getpid()
-    data = {"pid": pid, "port": port, "token": token}
+    data = {"pid": pid, "port": port}
     # Prefer ProgramData (Service path), then fall back to user LocalAppData
     wrote_any = False
     # 1) ProgramData
@@ -74,13 +80,9 @@ def _write_lockfile(port: int, token: str) -> None:
 def main():
     preferred = int(os.environ.get("AGENT_PORT", "5175"))
     host = os.environ.get("AGENT_HOST", "127.0.0.1")
-    # ensure token exists
-    if not os.environ.get("AGENT_TOKEN"):
-        import secrets
-        os.environ["AGENT_TOKEN"] = secrets.token_urlsafe(24)
     port = _choose_port(preferred, host=host)
     os.environ["AGENT_PORT"] = str(port)
-    _write_lockfile(port, os.environ.get("AGENT_TOKEN", ""))
+    _write_lockfile(port)
     run(host=host, port=port)
 
 

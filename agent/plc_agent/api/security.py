@@ -1,58 +1,47 @@
 from __future__ import annotations
 
-import os
-import secrets
-from typing import Callable
-
-from fastapi import Request
-from fastapi.responses import JSONResponse
 import logging
+from typing import Any, Dict, Optional
+
+import jwt
+from jwt import PyJWKClient
+
+from .keycloak_config import KEYCLOAK_JWKS_URL, KEYCLOAK_ALLOWED_ISSUERS
+
+log = logging.getLogger(__name__)
+
+_jwks_client: Optional[PyJWKClient] = None
 
 
-def get_or_create_token() -> str:
-    tok = os.environ.get("AGENT_TOKEN")
-    if not tok:
-        tok = secrets.token_urlsafe(24)
-        os.environ["AGENT_TOKEN"] = tok
-    return tok
+def _get_jwks_client() -> PyJWKClient:
+    global _jwks_client
+    if _jwks_client is None:
+        _jwks_client = PyJWKClient(
+            KEYCLOAK_JWKS_URL,
+            cache_keys=True,
+            lifespan=300,
+        )
+    return _jwks_client
 
 
-def auth_middleware() -> Callable:
-    token = get_or_create_token()
+def decode_jwt(token: str) -> Dict[str, Any]:
+    """Validate and decode a Keycloak JWT token. Returns claims dict."""
+    client = _get_jwks_client()
+    signing_key = client.get_signing_key_from_jwt(token)
+    claims = jwt.decode(
+        token,
+        signing_key.key,
+        algorithms=["RS256"],
+        issuer=KEYCLOAK_ALLOWED_ISSUERS,
+        options={"verify_aud": False},
+    )
+    return claims
 
-    async def middleware(request: Request, call_next):
-        # Allow unauthenticated access for local handshake and basic liveness
-        path = request.url.path or ""
-        if path in ("/auth/handshake", "/health", "/version"):
-            return await call_next(request)
 
-        hdr = request.headers.get("x-agent-token") or request.headers.get("authorization")
-        provided = None
-        if hdr:
-            if hdr.lower().startswith("bearer "):
-                provided = hdr.split(" ", 1)[1]
-            else:
-                provided = hdr
-        if provided != token:
-            try:
-                logging.getLogger(__name__).debug(
-                    "Auth failed path=%s provided=%s expected=%s",
-                    path,
-                    (provided[:4] + "…" + provided[-4:]) if provided else None,
-                    (token[:4] + "…" + token[-4:]) if token else None,
-                )
-            except Exception:
-                pass
-            resp = JSONResponse(status_code=401, content={
-                "success": False,
-                "error": "PERMISSION_DENIED",
-                "message": "Missing or invalid token",
-            })
-            try:
-                resp.headers["WWW-Authenticate"] = "Bearer realm=plc-agent"
-            except Exception:
-                pass
-            return resp
-        return await call_next(request)
-
-    return middleware
+def extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
+    """Extract token from 'Bearer <token>' header value."""
+    if not authorization:
+        return None
+    if authorization.lower().startswith("bearer "):
+        return authorization.split(" ", 1)[1].strip() or None
+    return None

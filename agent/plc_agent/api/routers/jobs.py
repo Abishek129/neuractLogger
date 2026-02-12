@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 import threading
 import time
 import logging
@@ -33,9 +34,15 @@ def _db_engine_for_table(table_id: str):
     url = "sqlite:///mydatabase.db"
     if target_id:
         target = store.get_db_target(target_id)
-        if target and target.get("provider") == "sqlite":
-            conn = target.get("conn") or ":memory:"
-            url = f"sqlite:///{conn}" if not str(conn).startswith("sqlite:") else conn
+        if target:
+            provider = (target.get("provider") or "").lower()
+            if provider == "sqlite":
+                conn = target.get("conn") or ":memory:"
+                url = f"sqlite:///{conn}" if not str(conn).startswith("sqlite:") else conn
+            elif provider in ("postgresql", "postgres", "mssql", "sqlserver", "mysql"):
+                conn = target.get("conn") or ""
+                if conn:
+                    url = conn
     cache = getattr(_thread_local, "engine_cache", None)
     if cache is None:
         cache = {}
@@ -129,10 +136,44 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
             _drop_opcua_client(endpoint)
             raise
     elif proto == "modbus":
-        # TODO: Implement TCP/RTU reads. For now, stub None values.
-        for field, spec in rows.items():
-            # For now we do not implement pyModbus here; return None
-            values[field] = None
+        host = (params.get("host") or params.get("ip") or "").strip()
+        port = int(params.get("port", 502))
+        if not host:
+            raise RuntimeError("MODBUS_HOST_MISSING")
+        try:
+            client = _get_modbus_client(host, port)
+            for field, spec in rows.items():
+                if (spec.get("protocol") or "").lower() != "modbus":
+                    continue
+                addr_raw = spec.get("address")
+                if addr_raw is None or addr_raw == "":
+                    continue
+                try:
+                    address = int(addr_raw)
+                    encoding = (spec.get("encoding") or "float32").lower()
+                    unit_id = int(spec.get("unitId") or 1)
+                    reg_count = _ENCODING_MAP.get(encoding, (1, ">H"))[0]
+                    rr = client.read_holding_registers(address=address, count=reg_count, device_id=unit_id)
+                    if hasattr(rr, "isError") and rr.isError():
+                        log.warning("Modbus read error field=%s addr=%s unit=%s err=%s", field, address, unit_id, rr)
+                        values[field] = None
+                        continue
+                    val = _decode_registers(rr.registers, encoding)
+                    # Apply scale if present
+                    sc = spec.get("scale")
+                    try:
+                        if sc is not None and isinstance(val, (int, float)):
+                            val = float(val) * float(sc)
+                    except Exception:
+                        pass
+                    values[field] = val
+                except Exception as e:
+                    log.warning("Modbus read failed field=%s addr=%s err=%s", field, addr_raw, e)
+                    values[field] = None
+        except Exception as e:
+            log.error("Modbus connect/read failed host=%s port=%s err=%s", host, port, e)
+            _drop_modbus_client(host, port)
+            raise
     else:
         raise RuntimeError("PROTOCOL_NOT_SUPPORTED")
     return values
@@ -213,6 +254,66 @@ def _drop_opcua_client(endpoint: str) -> None:
             client.disconnect()
         except Exception:
             pass
+
+
+# --- Modbus client cache & helpers ---
+_modbus_clients: Dict[str, Any] = {}
+_modbus_lock = threading.RLock()
+
+
+def _get_modbus_client(host: str, port: int):
+    key = f"{host}:{port}"
+    with _modbus_lock:
+        client = _modbus_clients.get(key)
+    if client and client.connected:
+        return client
+    from pymodbus.client import ModbusTcpClient  # type: ignore
+    client = ModbusTcpClient(host=host, port=port)
+    if not client.connect():
+        raise RuntimeError(f"MODBUS_CONNECT_FAILED: {key}")
+    with _modbus_lock:
+        _modbus_clients[key] = client
+    return client
+
+
+def _drop_modbus_client(host: str, port: int) -> None:
+    key = f"{host}:{port}"
+    with _modbus_lock:
+        client = _modbus_clients.pop(key, None)
+    if client:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
+# Encoding → (register count, struct format)
+_ENCODING_MAP = {
+    "float32": (2, ">f"),
+    "float": (2, ">f"),
+    "uint16": (1, ">H"),
+    "int16": (1, ">h"),
+    "uint32": (2, ">I"),
+    "int32": (2, ">i"),
+    "float64": (4, ">d"),
+    "uint64": (4, ">Q"),
+    "int64": (4, ">q"),
+}
+
+
+def _decode_registers(regs: list, encoding: str):
+    """Decode raw Modbus registers into a Python value."""
+    enc = (encoding or "float32").lower()
+    info = _ENCODING_MAP.get(enc)
+    if not info:
+        # Fallback: single register as int
+        return regs[0] if regs else None
+    count, fmt = info
+    if len(regs) < count:
+        return None
+    # Pack registers as big-endian 16-bit words, then unpack
+    raw = b"".join(r.to_bytes(2, "big") for r in regs[:count])
+    return struct.unpack(fmt, raw)[0]
 
 
 def _percentile_ms(samples: List[float], pct: float) -> Optional[float]:
