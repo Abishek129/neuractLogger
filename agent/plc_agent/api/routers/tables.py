@@ -44,6 +44,9 @@ def _sql_safe(name: str) -> bool:
     return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name))
 
 
+_engine_cache: Dict[str, Any] = {}
+
+
 def _engine_for_target(target_id: Optional[str]):
     store = Store.instance()
     url = SQLITE_FALLBACK_URL
@@ -68,7 +71,11 @@ def _engine_for_target(target_id: Optional[str]):
         elif provider in ("postgres", "postgresql", "psycopg2", "sqlserver", "mssql", "mysql"):
             # Use raw SQLAlchemy URL for non-sqlite targets.
             url = str(conn)
-    return create_engine(url)
+    if url in _engine_cache:
+        return _engine_cache[url]
+    engine = create_engine(url, pool_size=5, max_overflow=10, pool_pre_ping=True)
+    _engine_cache[url] = engine
+    return engine
 
 
 def _to_sa_type(ftype: str):

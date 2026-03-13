@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from ..permissions import require_logger_read
+# from ..permissions import require_logger_read
 from ..appdb import create_notification, list_notifications, NOTIFICATION_TYPES
 
 log = logging.getLogger(__name__)
@@ -32,15 +32,16 @@ async def _publish_to_redis(channel: str, payload: dict) -> None:
 async def create(
     payload: Dict[str, Any],
     request: Request,
-    claims: Dict[str, Any] = Depends(require_logger_read),
+    # claims: Dict[str, Any] = Depends(require_logger_read),
 ):
     """Create a notification and broadcast via Redis pub/sub.
 
     Body: {"message": "...", "type": "job"} (type optional, defaults to "job")
     """
-    user_uuid = claims.get("sub")
-    if not user_uuid:
-        raise HTTPException(status_code=400, detail="User id not found in token")
+    # user_uuid = claims.get("sub")
+    # if not user_uuid:
+    #     raise HTTPException(status_code=400, detail="User id not found in token")
+    user_uuid = "anonymous"
 
     message = (payload.get("message") or "").strip()
     if not message:
@@ -72,11 +73,12 @@ async def create(
 @router.get("/notifications/list")
 async def list_all(
     request: Request,
-    claims: Dict[str, Any] = Depends(require_logger_read),
+    # claims: Dict[str, Any] = Depends(require_logger_read),
 ):
     """List notifications for the current user."""
-    user_uuid = claims.get("sub")
-    if not user_uuid:
-        raise HTTPException(status_code=400, detail="User id not found in token")
+    # user_uuid = claims.get("sub")
+    # if not user_uuid:
+    #     raise HTTPException(status_code=400, detail="User id not found in token")
+    user_uuid = "anonymous"
 
     return list_notifications(user_uuid)

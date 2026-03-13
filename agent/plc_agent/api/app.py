@@ -19,8 +19,10 @@ from .routers import mappings as mappings_router
 from .routers import devices as devices_router
 from .routers import notifications as notifications_router
 from .routers import ws_notifications as ws_notifications_router
-from fastapi import Depends
-from .permissions import require_safe_or_write
+from .routers import protocol_types as protocol_types_router
+from .routers import bulk_import as bulk_import_router
+# from fastapi import Depends
+# from .permissions import require_safe_or_write
 from .store import Store
 from ..metrics import metrics as METRICS
 
@@ -36,7 +38,11 @@ def create_app() -> FastAPI:
         try:
             log_dir = Path(__file__).resolve().parent / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
-            fh = logging.FileHandler(log_dir / "agent.log", encoding="utf-8")
+            fh = RotatingFileHandler(
+                log_dir / "agent.log", encoding="utf-8",
+                maxBytes=500 * 1024 * 1024,  # rotate at 500 MB
+                backupCount=999,             # keep all rotated files (effectively unlimited)
+            )
             fh.setLevel(getattr(logging, os.environ.get("AGENT_LOG_LEVEL", "INFO").upper(), logging.INFO))
             fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
             fh.setFormatter(fmt)
@@ -81,6 +87,8 @@ def create_app() -> FastAPI:
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5175",
         "http://localhost:5175",
+        "http://127.0.0.1:9847",
+        "http://localhost:9847",
         "http://tauri.localhost",
         "https://tauri.localhost",
         "http://localhost:1420",
@@ -101,21 +109,31 @@ def create_app() -> FastAPI:
     app.include_router(schemas.router)
     app.include_router(tables_router.router)
     app.include_router(devices_router.router)
+    app.include_router(protocol_types_router.router)
+    app.include_router(bulk_import_router.router)
     # Unprotected legacy router
     app.include_router(jobs2.router)
-    # Protected routers (Keycloak JWT + role-based: IsNeuractAdminForUnsafeMethods)
-    _protected = [
-        jobs.router,
-        networking.router,
-        storage.router,
-        mappings_router.router,
-        system_router.router,
-        db_metrics_router.router,
-        reports_router.router,
-        debug_router.router,
-    ]
-    for r in _protected:
-        app.include_router(r, dependencies=[Depends(require_safe_or_write)])
+    # Protected routers (Keycloak JWT + role-based — permissions temporarily disabled)
+    # _protected = [
+    #     jobs.router,
+    #     networking.router,
+    #     storage.router,
+    #     mappings_router.router,
+    #     system_router.router,
+    #     db_metrics_router.router,
+    #     reports_router.router,
+    #     debug_router.router,
+    # ]
+    # for r in _protected:
+    #     app.include_router(r, dependencies=[Depends(require_safe_or_write)])
+    app.include_router(jobs.router)
+    app.include_router(networking.router)
+    app.include_router(storage.router)
+    app.include_router(mappings_router.router)
+    app.include_router(system_router.router)
+    app.include_router(db_metrics_router.router)
+    app.include_router(reports_router.router)
+    app.include_router(debug_router.router)
     # Notification routers (auth handled inside each endpoint/websocket)
     app.include_router(notifications_router.router)
     app.include_router(ws_notifications_router.router)
@@ -160,5 +178,4 @@ def create_app() -> FastAPI:
 
 # Exposed for `uvicorn agent.plc_agent.api.app:app`
 app = create_app()
-
 

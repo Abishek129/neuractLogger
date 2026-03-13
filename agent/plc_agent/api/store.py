@@ -51,6 +51,8 @@ class Store:
         self._dev_backoff: Dict[str, Dict[str, Any]] = {}
         self._dev_thread: Optional[threading.Thread] = None
         self._dev_thread_started: bool = False
+        # Protocol types cache
+        self._protocol_types: set[str] = set()
         # Logger
         self._log = logging.getLogger(__name__)
         _ensure_store_logger(self._log)
@@ -435,11 +437,23 @@ class Store:
     # -------------- Devices --------------
     def add_device(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         name = (payload.get("name") or "").strip() or f"Device-{int(time.time()*1000)}"
-        protocol = (payload.get("protocol") or "").strip() or "modbus"
+        protocol = (payload.get("protocol") or "").strip().lower() or "modbus"
+        if not self.is_valid_protocol(protocol):
+            raise ValueError(f"PROTOCOL_INVALID: '{protocol}'. Valid protocols: {', '.join(self.list_protocol_types())}")
         # params may include secrets like password; store but redact on read
         params = payload.get("params") or {}
         dev_id = payload.get("id") or f"dev_{int(time.time()*1000)}"
         auto_reconnect = bool(payload.get("autoReconnect", True))
+        unit_id = payload.get("unitId")
+        port = payload.get("port")
+        gateway_id = payload.get("gatewayId")
+
+        # Validate gateway exists if provided
+        if gateway_id:
+            gateway = self.get_gateway(gateway_id)
+            if not gateway:
+                raise ValueError(f"GATEWAY_NOT_FOUND: {gateway_id}")
+
         item = {
             "id": dev_id,
             "name": name,
@@ -450,6 +464,9 @@ class Store:
             "params": params,
             "autoReconnect": auto_reconnect,
             "manualDisconnect": False,
+            "unitId": unit_id,
+            "port": port,
+            "gatewayId": gateway_id,
         }
         with self._mtx:
             # Prevent duplicate by name (case-insensitive)
@@ -486,7 +503,25 @@ class Store:
                     dev[k] = patch[k]
             if "autoReconnect" in patch:
                 dev["autoReconnect"] = bool(patch.get("autoReconnect"))
-        appdb.update_device_metadata(dev_id, name=patch.get("name"), auto_reconnect=patch.get("autoReconnect"))
+            if "unitId" in patch:
+                dev["unitId"] = patch.get("unitId")
+            if "port" in patch:
+                dev["port"] = patch.get("port")
+            if "gatewayId" in patch:
+                # Validate gateway exists
+                if patch.get("gatewayId"):
+                    gateway = self.get_gateway(patch.get("gatewayId"))
+                    if not gateway:
+                        raise ValueError(f"GATEWAY_NOT_FOUND: {patch.get('gatewayId')}")
+                dev["gatewayId"] = patch.get("gatewayId")
+        appdb.update_device_metadata(
+            dev_id,
+            name=patch.get("name"),
+            auto_reconnect=patch.get("autoReconnect"),
+            unit_id=patch.get("unitId"),
+            port=patch.get("port"),
+            gateway_id=patch.get("gatewayId")
+        )
         return self._redact_device(self._devices.get(dev_id))
 
     def set_device_status(self, dev_id: str, *, status: str, latency_ms: Optional[int] = None, last_error: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -529,6 +564,10 @@ class Store:
         nic_hint = payload.get("nic_hint") or adapter_id
         ports = payload.get("ports") or []
         protocol_hint = payload.get("protocol_hint")
+        if protocol_hint:
+            protocol_hint = protocol_hint.strip().lower()
+            if not self.is_valid_protocol(protocol_hint):
+                raise ValueError(f"PROTOCOL_HINT_INVALID: '{protocol_hint}'")
         tags = payload.get("tags") or []
         if not name or not host:
             raise ValueError("NAME_AND_HOST_REQUIRED")
@@ -596,6 +635,14 @@ class Store:
         with self._mtx:
             return next((g for g in self._gateways if g.get("id") == gid), None)
 
+    def find_gateway_by_host(self, host: str) -> Optional[Dict[str, Any]]:
+        """Find gateway by host (case-insensitive)."""
+        if not host:
+            return None
+        host_lower = host.strip().lower()
+        with self._mtx:
+            return next((g for g in self._gateways if (g.get("host") or "").lower() == host_lower), None)
+
     def delete_gateway(self, gid: str) -> bool:
         with self._mtx:
             # Block deletion if referenced by any saved device (Option A)
@@ -637,6 +684,30 @@ class Store:
                     }
                     return self._gateways[i]
         return None
+
+    # -------------- Protocol Types --------------
+    def refresh_protocol_types(self) -> None:
+        """Refresh protocol types cache from database."""
+        with self._mtx:
+            try:
+                self._protocol_types = set(appdb.load_protocol_types())
+                self._log.info(f"Loaded {len(self._protocol_types)} protocol types")
+            except Exception as e:
+                self._log.error(f"Failed to load protocol types: {e}")
+                # Fallback to hardcoded for safety
+                self._protocol_types = {"modbus", "opcua"}
+
+    def list_protocol_types(self) -> List[str]:
+        """Get sorted list of valid protocol types."""
+        with self._mtx:
+            return sorted(list(self._protocol_types))
+
+    def is_valid_protocol(self, protocol: str) -> bool:
+        """Check if protocol is valid."""
+        if not protocol:
+            return False
+        with self._mtx:
+            return protocol.lower() in self._protocol_types
 
     # -------------- Init/load --------------
     def load_from_app_db(self) -> None:
@@ -722,10 +793,17 @@ class Store:
                 self._jobs = appdb.load_jobs()
             except Exception:
                 self._jobs = []
+            # Protocol types
+            try:
+                self._protocol_types = set(appdb.load_protocol_types())
+            except Exception:
+                self._protocol_types = {"modbus", "opcua"}
 
     # -------------- Device reconnect loop --------------
-    def test_device_params(self, protocol: str, params: Dict[str, Any]) -> (bool, int, Optional[str]):
-        return self._attempt_connect({"protocol": protocol, "params": params or {}})
+    def test_device_params(self, protocol: str, params: Dict[str, Any], **extra) -> (bool, int, Optional[str]):
+        dev = {"protocol": protocol, "params": params or {}}
+        dev.update(extra)
+        return self._attempt_connect(dev)
 
     def test_device_connection(self, dev_id: str) -> (bool, int, Optional[str]):
         with self._mtx:
@@ -793,13 +871,45 @@ class Store:
             time.sleep(1.0)
 
     def _attempt_connect(self, dev: Dict[str, Any]) -> (bool, int, Optional[str]):
-        proto = (dev.get("protocol") or "").lower()
-        params = dev.get("params") or {}
         t0 = time.perf_counter()
         try:
-            if proto == "modbus":
+            # Get gateway if specified
+            gateway_id = dev.get("gatewayId")
+            gateway = None
+            if gateway_id:
+                gateway = self.get_gateway(gateway_id)
+                if not gateway:
+                    return False, 0, f"GATEWAY_NOT_FOUND: {gateway_id}"
+
+            # Determine protocol - from gateway's protocol_hint or device's protocol
+            if gateway and gateway.get("protocol_hint"):
+                proto = (gateway.get("protocol_hint") or "").lower()
+            else:
+                proto = (dev.get("protocol") or "").lower()
+
+            if not proto:
+                return False, 0, "PROTOCOL_NOT_SPECIFIED"
+
+            # Get host - from gateway or fallback to params
+            if gateway and gateway.get("host"):
+                host = gateway.get("host")
+            else:
+                params = dev.get("params") or {}
                 host = (params.get("host") or params.get("ip") or "").strip()
-                port = int(params.get("port", 502))
+
+            # Get port - from device.port or fallback to params or defaults
+            port = dev.get("port")
+            if port is None:
+                params = dev.get("params") or {}
+                if proto == "modbus":
+                    port = int(params.get("port", 502))
+                elif proto == "opcua":
+                    port = int(params.get("port", 4840))
+                else:
+                    port = int(params.get("port", 502))
+
+            # Attempt connection based on protocol
+            if proto == "modbus":
                 if not host:
                     return False, 0, "HOST_REQUIRED"
                 try:
@@ -817,27 +927,47 @@ class Store:
                         pass
                 dt = int((time.perf_counter() - t0) * 1000)
                 return (True, dt, None) if ok else (False, dt, "TCP_CONNECT_FAILED")
+
             elif proto == "opcua":
-                ep = (params.get("endpoint") or "").strip()
-                if "0.0.0.0" in ep:
-                    ep = ep.replace("0.0.0.0", "127.0.0.1")
-                if not ep:
-                    return False, 0, "ENDPOINT_REQUIRED"
+                # For OPC UA, resolve endpoint from: gateway.host > params.endpoint > host:port
+                params = dev.get("params") or {}
+                endpoint = None
+                if gateway and gateway.get("host"):
+                    gw_host = gateway["host"]
+                    if gw_host.startswith("opc.tcp://"):
+                        endpoint = gw_host
+                    else:
+                        gw_port = (gateway.get("ports") or [None])[0] or port
+                        endpoint = f"opc.tcp://{gw_host}:{gw_port}"
+                if not endpoint:
+                    endpoint = params.get("endpoint")
+                if not endpoint and host:
+                    endpoint = f"opc.tcp://{host}:{port}"
+                if not endpoint:
+                    return False, 0, "OPCUA_ENDPOINT_MISSING"
+
+                if "0.0.0.0" in endpoint:
+                    endpoint = endpoint.replace("0.0.0.0", "127.0.0.1")
+
                 try:
                     from opcua import Client  # type: ignore
                 except Exception:
                     return False, 0, "OPCUA_PKG_MISSING"
-                client = Client(ep)
+                client = Client(endpoint)
                 try:
-                    client.connect(); client.disconnect()
+                    client.connect()
+                    client.disconnect()
                 except Exception as e:
                     dt = int((time.perf_counter() - t0) * 1000)
                     return False, dt, str(e)
                 dt = int((time.perf_counter() - t0) * 1000)
                 return True, dt, None
+
             else:
                 dt = int((time.perf_counter() - t0) * 1000)
-                return False, dt, "PROTOCOL_UNSUPPORTED"
+                valid = self.list_protocol_types()
+                return False, dt, f"PROTOCOL_UNSUPPORTED: '{proto}'. Valid: {', '.join(valid)}"
+
         except Exception as e:
             dt = int((time.perf_counter() - t0) * 1000)
             return False, dt, str(e)

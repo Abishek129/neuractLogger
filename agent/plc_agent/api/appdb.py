@@ -244,6 +244,9 @@ def init() -> None:
             )
         )
         _ensure_column(c, "app_devices", "auto_reconnect", "INTEGER")
+        _ensure_column(c, "app_devices", "unit_id", "INTEGER")
+        _ensure_column(c, "app_devices", "port", "INTEGER")
+        _ensure_column(c, "app_devices", "gateway_id", "TEXT")
         c.execute(
             text(
                 """
@@ -353,6 +356,44 @@ def init() -> None:
                 """
             )
         )
+        # Protocol types table
+        c.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS app_protocol_types (
+                    type TEXT PRIMARY KEY
+                )
+                """
+            )
+        )
+        # Pre-populate with existing protocols
+        for proto in ["modbus", "opcua"]:
+            try:
+                c.execute(
+                    text(_upsert_sql("app_protocol_types", ["type"], ["type"])),
+                    {"type": proto}
+                )
+            except Exception:
+                pass  # Already exists
+
+        # Add foreign key constraint from gateways.protocol_hint to protocol_types.type
+        # Only for PostgreSQL (SQLite doesn't support ALTER TABLE ADD CONSTRAINT easily)
+        try:
+            dialect = c.connection.dialect.name
+            if dialect in ("postgresql", "postgres", "psycopg2"):
+                c.execute(
+                    text(
+                        """
+                        ALTER TABLE app_gateways
+                        ADD CONSTRAINT fk_gateway_protocol_hint
+                        FOREIGN KEY (protocol_hint)
+                        REFERENCES app_protocol_types(type)
+                        """
+                    )
+                )
+        except Exception:
+            # Constraint already exists or not supported
+            pass
 
 # ---------- Schemas ----------
 def load_schemas() -> List[Dict[str, Any]]:
@@ -837,7 +878,7 @@ def load_devices() -> List[Dict[str, Any]]:
     with _conn() as c:
         rs = _fetchall(
             c,
-            "SELECT id,name,protocol,params_json,status,latency_ms,last_error,auto_reconnect FROM app_devices ORDER BY name",
+            "SELECT id,name,protocol,params_json,status,latency_ms,last_error,auto_reconnect,unit_id,port,gateway_id FROM app_devices ORDER BY name",
         )
         out: List[Dict[str, Any]] = []
         for r in rs:
@@ -855,6 +896,9 @@ def load_devices() -> List[Dict[str, Any]]:
                     "latencyMs": r.get("latency_ms"),
                     "lastError": r.get("last_error"),
                     "autoReconnect": bool(ar),
+                    "unitId": r.get("unit_id"),
+                    "port": r.get("port"),
+                    "gatewayId": r.get("gateway_id"),
                 }
             )
         return out
@@ -866,7 +910,7 @@ def upsert_device(dev: Dict[str, Any]) -> Dict[str, Any]:
         if row:
             existing = _fetchone(
                 c,
-                "SELECT id,name,protocol,params_json,status,latency_ms,last_error,auto_reconnect FROM app_devices WHERE id=:id",
+                "SELECT id,name,protocol,params_json,status,latency_ms,last_error,auto_reconnect,unit_id,port,gateway_id FROM app_devices WHERE id=:id",
                 {"id": row["id"]},
             )
             if existing:
@@ -882,13 +926,16 @@ def upsert_device(dev: Dict[str, Any]) -> Dict[str, Any]:
                     "latencyMs": existing.get("latency_ms"),
                     "lastError": existing.get("last_error"),
                     "autoReconnect": bool(ar),
+                    "unitId": existing.get("unit_id"),
+                    "port": existing.get("port"),
+                    "gatewayId": existing.get("gateway_id"),
                 }
         params_blob = _params_dump(dev.get("params") or {})
         c.execute(
             text(
                 _upsert_sql(
                     "app_devices",
-                    ["id", "name", "protocol", "params_json", "status", "latency_ms", "last_error", "auto_reconnect"],
+                    ["id", "name", "protocol", "params_json", "status", "latency_ms", "last_error", "auto_reconnect", "unit_id", "port", "gateway_id"],
                     ["id"],
                 )
             ),
@@ -901,6 +948,9 @@ def upsert_device(dev: Dict[str, Any]) -> Dict[str, Any]:
                 "latency_ms": dev.get("latencyMs"),
                 "last_error": dev.get("lastError"),
                 "auto_reconnect": 1 if dev.get("autoReconnect", True) else 0,
+                "unit_id": dev.get("unitId"),
+                "port": dev.get("port"),
+                "gateway_id": dev.get("gatewayId"),
             },
         )
         return dev
@@ -1029,7 +1079,7 @@ def delete_job(job_id: str) -> bool:
         return bool(res.rowcount and res.rowcount > 0)
 
 
-def update_device_metadata(dev_id: str, *, name: Optional[str] = None, auto_reconnect: Optional[bool] = None) -> None:
+def update_device_metadata(dev_id: str, *, name: Optional[str] = None, auto_reconnect: Optional[bool] = None, unit_id: Optional[int] = None, port: Optional[int] = None, gateway_id: Optional[str] = None) -> None:
     fields: List[str] = []
     values: Dict[str, Any] = {"id": dev_id}
     if name is not None:
@@ -1038,6 +1088,15 @@ def update_device_metadata(dev_id: str, *, name: Optional[str] = None, auto_reco
     if auto_reconnect is not None:
         fields.append("auto_reconnect=:auto_reconnect")
         values["auto_reconnect"] = 1 if auto_reconnect else 0
+    if unit_id is not None:
+        fields.append("unit_id=:unit_id")
+        values["unit_id"] = unit_id
+    if port is not None:
+        fields.append("port=:port")
+        values["port"] = port
+    if gateway_id is not None:
+        fields.append("gateway_id=:gateway_id")
+        values["gateway_id"] = gateway_id
     if not fields:
         return
     with _conn() as c:
@@ -1136,6 +1195,51 @@ def create_notification(notif_type: str, message: str, user: str) -> Dict[str, A
             {"id": notif_id, "type": notif_type, "message": message, "user": user, "read": False, "time": now},
         )
     return {"id": notif_id, "type": notif_type, "message": message, "user": user, "read": False, "time": now}
+
+
+# ---------- Protocol Types ----------
+def load_protocol_types() -> List[str]:
+    """Load all valid protocol types."""
+    with _conn() as c:
+        rows = _fetchall(c, "SELECT type FROM app_protocol_types ORDER BY type")
+        return [r["type"] for r in rows]
+
+
+def add_protocol_type(protocol_type: str) -> Dict[str, Any]:
+    """Add a new protocol type. Returns the created/existing protocol."""
+    protocol_type = protocol_type.strip().lower()
+    if not protocol_type:
+        raise ValueError("PROTOCOL_TYPE_REQUIRED")
+
+    with _conn() as c:
+        c.execute(
+            text(_upsert_sql("app_protocol_types", ["type"], ["type"])),
+            {"type": protocol_type}
+        )
+    return {"type": protocol_type}
+
+
+def delete_protocol_type(protocol_type: str) -> bool:
+    """Delete a protocol type. Returns True if deleted, False if not found."""
+    with _conn() as c:
+        res = c.execute(
+            text("DELETE FROM app_protocol_types WHERE type=:type"),
+            {"type": protocol_type}
+        )
+        return bool(res.rowcount and res.rowcount > 0)
+
+
+def is_valid_protocol(protocol: str) -> bool:
+    """Check if a protocol type exists in the database."""
+    if not protocol:
+        return False
+    with _conn() as c:
+        row = _fetchone(
+            c,
+            "SELECT type FROM app_protocol_types WHERE type=:type",
+            {"type": protocol.lower()}
+        )
+        return row is not None
 
 
 def list_notifications(user_uuid: str) -> List[Dict[str, Any]]:

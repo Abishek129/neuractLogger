@@ -101,8 +101,12 @@ def validate_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             problems.append({"field": k, "code": "MAPPING_INCOMPLETE"})
         else:
             proto = r.get("protocol")
-            if proto not in ("modbus", "opcua"):
-                problems.append({"field": k, "code": "MAPPING_TYPE_MISMATCH"})
+            if not Store.instance().is_valid_protocol(proto or ""):
+                problems.append({
+                    "field": k,
+                    "code": "MAPPING_TYPE_MISMATCH",
+                    "message": f"Invalid protocol: {proto}"
+                })
             if not r.get("address"):
                 problems.append({"field": k, "code": "MAPPING_INCOMPLETE"})
             # For OPC UA, datatype is informational; skip hard requirement
@@ -161,8 +165,22 @@ def _opcua_can_read(device: Dict[str, Any], row: Dict[str, Any]) -> bool:
             from opcua import Client  # type: ignore
         except Exception:
             return False
-        params = device.get("params") or {}
-        ep = (params.get("endpoint") or "").strip()
+        # Resolve endpoint: gateway.host > params.endpoint
+        from ..store import Store
+        ep = None
+        gateway_id = device.get("gatewayId")
+        if gateway_id:
+            gateway = Store.instance().get_gateway(gateway_id)
+            if gateway and gateway.get("host"):
+                gw_host = gateway["host"]
+                if gw_host.startswith("opc.tcp://"):
+                    ep = gw_host
+                else:
+                    gw_port = (gateway.get("ports") or [4840])[0] or 4840
+                    ep = f"opc.tcp://{gw_host}:{gw_port}"
+        if not ep:
+            params = device.get("params") or {}
+            ep = (params.get("endpoint") or "").strip()
         if not ep:
             return False
         node_id = (row.get("address") or row.get("nodeId") or "").strip()
@@ -194,11 +212,28 @@ def _modbus_can_read(device: Dict[str, Any], row: Dict[str, Any]) -> bool:
             from pymodbus.client import ModbusTcpClient  # type: ignore
         except Exception:
             return False
-        params = device.get("params") or {}
-        host = (params.get("host") or params.get("ip") or "").strip()
-        port = int(params.get("port", 502))
+        # Get host - from gateway or fallback to params
+        gateway_id = device.get("gatewayId")
+        gateway = None
+        if gateway_id:
+            gateway = Store.instance().get_gateway(gateway_id)
+
+        if gateway and gateway.get("host"):
+            host = gateway.get("host")
+        else:
+            params = device.get("params") or {}
+            host = (params.get("host") or params.get("ip") or "").strip()
+
         if not host:
             return False
+
+        # Get port - from device.port or fallback to params or default
+        port = device.get("port")
+        if port is None:
+            params = device.get("params") or {}
+            port = int(params.get("port", 502))
+        else:
+            port = int(port)
         addr_raw = str(row.get("address") or "").strip()
         if not addr_raw or not addr_raw.isdigit():
             # Accept numeric-like strings; anything else skip
@@ -533,12 +568,54 @@ def _load_mapping_from_user_db(table: Dict[str, Any]) -> Optional[Dict[str, Any]
             pass
         rows = []
         with engine.begin() as conn:
+            has_encoding = False
+            try:
+                dname = _dialect_name(engine)
+                if dname.startswith("postgres"):
+                    if "." in m_table:
+                        schema_name, table_name = m_table.split(".", 1)
+                    else:
+                        schema_name, table_name = "public", m_table
+                    enc_row = conn.execute(
+                        text(
+                            "SELECT 1 FROM information_schema.columns "
+                            "WHERE table_schema=:s AND table_name=:t AND column_name='encoding' LIMIT 1"
+                        ),
+                        {"s": schema_name, "t": table_name},
+                    ).first()
+                    has_encoding = bool(enc_row)
+                else:
+                    # SQLite style table_info; works for local/fallback targets.
+                    base_name = m_table.split(".")[-1]
+                    cols = conn.execute(text(f"PRAGMA table_info({base_name})")).fetchall()
+                    names = set()
+                    for c in cols or []:
+                        try:
+                            names.add(c[1])
+                        except Exception:
+                            try:
+                                names.add(c["name"])  # type: ignore[index]
+                            except Exception:
+                                pass
+                    has_encoding = "encoding" in names
+            except Exception:
+                has_encoding = False
+
+            def _fetch_rows(table_name: str):
+                # Newer schema includes `encoding`; older deployments may not.
+                if has_encoding:
+                    return conn.execute(
+                        text(f"SELECT field_key,protocol,address,data_type,scale,deadband,device_id,encoding FROM {m_table} WHERE table_name=:t"),
+                        {"t": table_name},
+                    ).fetchall()
+                return conn.execute(
+                    text(f"SELECT field_key,protocol,address,data_type,scale,deadband,device_id FROM {m_table} WHERE table_name=:t"),
+                    {"t": table_name},
+                ).fetchall()
+
             # Try logical name first
             try:
-                rows = conn.execute(
-                    text(f"SELECT field_key,protocol,address,data_type,scale,deadband,device_id,unit_id,encoding FROM {m_table} WHERE table_name=:t"),
-                    {"t": logical},
-                ).fetchall()
+                rows = _fetch_rows(logical)
                 try:
                     log.info(f"mappings._load.query: table={logical} -> {len(rows)} rows")
                 except Exception:
@@ -547,10 +624,7 @@ def _load_mapping_from_user_db(table: Dict[str, Any]) -> Optional[Dict[str, Any]
                 rows = []
             if not rows and prefixed != logical:
                 try:
-                    rows = conn.execute(
-                        text(f"SELECT field_key,protocol,address,data_type,scale,deadband,device_id,unit_id,encoding FROM {m_table} WHERE table_name=:t"),
-                        {"t": prefixed},
-                    ).fetchall()
+                    rows = _fetch_rows(prefixed)
                     try:
                         log.info(f"mappings._load.query: table={prefixed} -> {len(rows)} rows")
                     except Exception:
@@ -594,8 +668,7 @@ def _load_mapping_from_user_db(table: Dict[str, Any]) -> Optional[Dict[str, Any]
                 "dataType": _get(r, "data_type", 3),
                 "scale": _get(r, "scale", 4),
                 "deadband": _get(r, "deadband", 5),
-                "unitId": _get(r, "unit_id", 7),
-                "encoding": _get(r, "encoding", 8),
+                "encoding": _get(r, "encoding", 7),
             }
         try:
             log.info(f"mappings._load: table={table.get('id')} name={table.get('name')} target={table.get('dbTargetId')} rows={len(out['rows'])} dev={out.get('deviceId')}")

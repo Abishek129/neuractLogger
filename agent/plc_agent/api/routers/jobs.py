@@ -73,12 +73,13 @@ def _uses_schema(engine) -> bool:
 
 def _physical_ident(engine, logical_name: str) -> Dict[str, str]:
     if _uses_schema(engine):
-        return {"schema": NEURACT_SCHEMA, "name": logical_name, "qualified": f"{NEURACT_SCHEMA}.{logical_name}"}
+        return {"schema": NEURACT_SCHEMA, "name": logical_name, "qualified": f'"{NEURACT_SCHEMA}"."{logical_name}"'}
     name = f"{NEURACT_PREFIX}{logical_name}"
     return {"schema": None, "name": name, "qualified": name}
 
 
-def _read_mapping_values(table_id: str) -> Dict[str, Any]:
+def _read_mapping_values(table_id: str, job_id: str = "") -> Dict[str, Any]:
+    t_fn = time.perf_counter()
     store = Store.instance()
     mapping = store.get_mapping(table_id)
     device_id = mapping.get("deviceId")
@@ -90,6 +91,8 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
         raise RuntimeError("DEVICE_NOT_FOUND")
     proto = (dev.get("protocol") or "").lower()
     params = dev.get("params") or {}
+    lookup_ms = (time.perf_counter() - t_fn) * 1000.0
+    log.info("Job %s [READ_MAPPING] table=%s [LOOKUP] proto=%s fields=%d elapsed_ms=%.2f", job_id, table_id, proto, len(rows), lookup_ms)
     values: Dict[str, Any] = {}
     if proto == "opcua":
         try:
@@ -97,21 +100,37 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
             _ = opcua
         except Exception as e:
             raise RuntimeError(f"OPCUA_PKG_MISSING: {e}")
-        endpoint = params.get("endpoint") or "opc.tcp://127.0.0.1:4840/freeopcua/server/"
+
+        # Get endpoint - from gateway.host or fallback to params
+        gateway_id = dev.get("gatewayId")
+        gateway = None
+        if gateway_id:
+            gateway = store.get_gateway(gateway_id)
+
+        if gateway and gateway.get("host"):
+            endpoint = gateway.get("host")
+        else:
+            endpoint = params.get("endpoint") or "opc.tcp://127.0.0.1:4840/freeopcua/server/"
         # Some servers advertise 0.0.0.0 which is not connectable; replace with loopback
         if isinstance(endpoint, str) and "0.0.0.0" in endpoint:
             safe_ep = endpoint.replace("0.0.0.0", "127.0.0.1")
             log.info("OPC UA endpoint normalized from %s to %s", endpoint, safe_ep)
             endpoint = safe_ep
         try:
+            t_conn = time.perf_counter()
             client = _get_opcua_client(endpoint)
+            conn_ms = (time.perf_counter() - t_conn) * 1000.0
+            log.info("Job %s [READ_MAPPING] table=%s [OPCUA_CONNECT] endpoint=%s elapsed_ms=%.2f", job_id, table_id, endpoint, conn_ms)
+            t_fields = time.perf_counter()
             for field, spec in rows.items():
-                if (spec.get("protocol") or "").lower() != "opcua":
+                spec_proto = (spec.get("protocol") or "").lower()
+                if spec_proto and spec_proto != "opcua":
                     continue
                 nid = spec.get("address") or spec.get("nodeId")
                 if not nid:
                     continue
                 try:
+                    t_field = time.perf_counter()
                     key = (endpoint, str(nid))
                     with _opcua_lock:
                         node = _opcua_nodes.get(key)
@@ -128,30 +147,53 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
                     except Exception:
                         pass
                     values[field] = val
+                    log.info("Job %s [READ_MAPPING] table=%s [OPCUA_FIELD] field=%s node=%s elapsed_ms=%.2f", job_id, table_id, field, nid, (time.perf_counter() - t_field) * 1000.0)
                 except Exception as e:
                     log.warning("OPC UA read failed field=%s node=%s err=%s", field, nid, e)
                     values[field] = None
+            fields_ms = (time.perf_counter() - t_fields) * 1000.0
+            log.info("Job %s [READ_MAPPING] table=%s [OPCUA_FIELDS_TOTAL] count=%d elapsed_ms=%.2f", job_id, table_id, len(values), fields_ms)
         except Exception as e:
             log.error("OPC UA connect/read failed endpoint=%s err=%s", endpoint, e)
             _drop_opcua_client(endpoint)
             raise
     elif proto == "modbus":
-        host = (params.get("host") or params.get("ip") or "").strip()
-        port = int(params.get("port", 502))
+        # Get host - from gateway or fallback to params
+        gateway_id = dev.get("gatewayId")
+        gateway = None
+        if gateway_id:
+            gateway = store.get_gateway(gateway_id)
+
+        if gateway and gateway.get("host"):
+            host = gateway.get("host")
+        else:
+            host = (params.get("host") or params.get("ip") or "").strip()
+
         if not host:
             raise RuntimeError("MODBUS_HOST_MISSING")
+
+        # Get port - from device.port or fallback to params or default
+        port = dev.get("port")
+        if port is None:
+            port = int(params.get("port", 502))
         try:
+            t_conn = time.perf_counter()
             client = _get_modbus_client(host, port)
+            conn_ms = (time.perf_counter() - t_conn) * 1000.0
+            log.info("Job %s [READ_MAPPING] table=%s [MODBUS_CONNECT] host=%s port=%s elapsed_ms=%.2f", job_id, table_id, host, port, conn_ms)
+            t_fields = time.perf_counter()
             for field, spec in rows.items():
-                if (spec.get("protocol") or "").lower() != "modbus":
+                spec_proto = (spec.get("protocol") or "").lower()
+                if spec_proto and spec_proto != "modbus":
                     continue
                 addr_raw = spec.get("address")
                 if addr_raw is None or addr_raw == "":
                     continue
                 try:
+                    t_field = time.perf_counter()
                     address = int(addr_raw)
-                    encoding = (spec.get("encoding") or "float32").lower()
-                    unit_id = int(spec.get("unitId") or 1)
+                    encoding = (spec.get("encoding") or spec.get("dataType") or "float32").lower()
+                    unit_id = int(dev.get("unitId") or 1)
                     reg_count = _ENCODING_MAP.get(encoding, (1, ">H"))[0]
                     rr = client.read_holding_registers(address=address, count=reg_count, device_id=unit_id)
                     if hasattr(rr, "isError") and rr.isError():
@@ -159,6 +201,11 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
                         values[field] = None
                         continue
                     val = _decode_registers(rr.registers, encoding)
+                    # Post-decode type coercion for non-float encodings
+                    if encoding == "bool16":
+                        val = bool(int(val)) if val is not None else None
+                    elif encoding == "uint16_enum":
+                        val = str(int(val)) if val is not None else None
                     # Apply scale if present
                     sc = spec.get("scale")
                     try:
@@ -167,15 +214,20 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
                     except Exception:
                         pass
                     values[field] = val
+                    log.info("Job %s [READ_MAPPING] table=%s [MODBUS_FIELD] field=%s addr=%s elapsed_ms=%.2f", job_id, table_id, field, addr_raw, (time.perf_counter() - t_field) * 1000.0)
                 except Exception as e:
                     log.warning("Modbus read failed field=%s addr=%s err=%s", field, addr_raw, e)
                     values[field] = None
+            fields_ms = (time.perf_counter() - t_fields) * 1000.0
+            log.info("Job %s [READ_MAPPING] table=%s [MODBUS_FIELDS_TOTAL] count=%d elapsed_ms=%.2f", job_id, table_id, len(values), fields_ms)
         except Exception as e:
             log.error("Modbus connect/read failed host=%s port=%s err=%s", host, port, e)
             _drop_modbus_client(host, port)
             raise
     else:
         raise RuntimeError("PROTOCOL_NOT_SUPPORTED")
+    total_ms = (time.perf_counter() - t_fn) * 1000.0
+    log.info("Job %s [READ_MAPPING] table=%s [TOTAL] fields=%d elapsed_ms=%.2f", job_id, table_id, len(values), total_ms)
     return values
 
 
@@ -292,6 +344,8 @@ _ENCODING_MAP = {
     "float32": (2, ">f"),
     "float": (2, ">f"),
     "uint16": (1, ">H"),
+    "uint16_enum": (1, ">H"),
+    "bool16": (1, ">H"),
     "int16": (1, ">h"),
     "uint32": (2, ">I"),
     "int32": (2, ">i"),
@@ -333,7 +387,7 @@ def _get_thread_cpu_time_sec(thread_id: int) -> Optional[float]:
         return None
     now = time.perf_counter()
     with _thread_cpu_cache_lock:
-        global _thread_cpu_cache_ts
+        global _thread_cpu_cache, _thread_cpu_cache_ts
         if (now - _thread_cpu_cache_ts) > 1.0 or not _thread_cpu_cache:
             try:
                 proc = psutil.Process()
@@ -438,6 +492,30 @@ def _append_bench_csv(row: Dict[str, Any]) -> None:
                 pass
 
 
+def _write_table_values_batch(engine, ident: Dict[str, str], rows: List[Dict[str, Any]], job_id: str = "") -> None:
+    """Write multiple rows in one transaction using executemany semantics."""
+    if not rows:
+        return
+    t_fn = time.perf_counter()
+    canonical_keys = list(rows[0].keys())
+    col_list = ",".join(canonical_keys)
+    placeholders = ",".join([f":{k}" for k in canonical_keys])
+    sql = f"INSERT INTO {ident['qualified']} ({col_list}) VALUES ({placeholders})"
+    build_ms = (time.perf_counter() - t_fn) * 1000.0
+    log.info("Job %s [WRITE_BATCH_DETAIL] table=%s [SQL_BUILD] cols=%d rows=%d elapsed_ms=%.2f", job_id, ident.get("name"), len(canonical_keys), len(rows), build_ms)
+    t_norm = time.perf_counter()
+    normalized = [{k: row.get(k) for k in canonical_keys} for row in rows]
+    norm_ms = (time.perf_counter() - t_norm) * 1000.0
+    log.info("Job %s [WRITE_BATCH_DETAIL] table=%s [NORMALIZE] rows=%d elapsed_ms=%.2f", job_id, ident.get("name"), len(rows), norm_ms)
+    t_exec = time.perf_counter()
+    with engine.begin() as conn:
+        conn.execute(text(sql), normalized)
+    exec_ms = (time.perf_counter() - t_exec) * 1000.0
+    log.info("Job %s [WRITE_BATCH_DETAIL] table=%s [DB_EXECUTE] rows=%d elapsed_ms=%.2f", job_id, ident.get("name"), len(rows), exec_ms)
+    total_ms = (time.perf_counter() - t_fn) * 1000.0
+    log.info("Job %s [WRITE_BATCH_DETAIL] table=%s [TOTAL] rows=%d elapsed_ms=%.2f", job_id, ident.get("name"), len(rows), total_ms)
+
+
 def _run_job_loop(job_id: str):
     store = Store.instance()
     job = store.get_job(job_id)
@@ -448,6 +526,13 @@ def _run_job_loop(job_id: str):
     jtype = (job.get("type") or "continuous").lower()
     if jtype == "triggered":
         jtype = "trigger"
+    # --- Batching config (continuous jobs only) ---
+    batching_cfg = job.get("batching") or {}
+    batch_count = max(1, int(batching_cfg.get("count") or 1))
+    batch_ms = float(batching_cfg.get("ms") or 0)
+    use_batching = (jtype == "continuous") and (batch_count > 1 or batch_ms > 0)
+    _batch_buffers: Dict[str, List[Dict[str, Any]]] = {}
+    _batch_flush_ts: Dict[str, float] = {}
     # Prepare state containers
     _job_last_values.setdefault(job_id, {})
     _job_cooldowns.setdefault(job_id, {})
@@ -477,17 +562,73 @@ def _run_job_loop(job_id: str):
     loop_samples_ms = deque(maxlen=1000)
     thread_id = threading.get_native_id()
     last_cpu_time = _get_thread_cpu_time_sec(thread_id)
+
+    def _flush_batch(tbl_id: str) -> None:
+        nonlocal win_writes_ok, win_writes_err, win_write_ms_sum
+        buf = _batch_buffers.get(tbl_id)
+        if not buf:
+            _batch_flush_ts[tbl_id] = time.perf_counter()
+            return
+        n = len(buf)
+        try:
+            engine = _db_engine_for_table(tbl_id)
+            table = Store.instance().get_table(tbl_id)
+            logical = table.get("name") if table else None
+            if not logical:
+                _batch_buffers[tbl_id] = []
+                _batch_flush_ts[tbl_id] = time.perf_counter()
+                return
+            ident = _physical_ident(engine, logical)
+            t1 = time.perf_counter()
+            _write_table_values_batch(engine, ident, buf, job_id=job_id)
+            write_lat = (time.perf_counter() - t1) * 1000.0
+            win_write_ms_sum += write_lat
+            win_writes_ok += 1
+            try:
+                target_id = table.get("dbTargetId") if table else None
+                METRICS.get_job(job_id).record_write(
+                    write_lat, ok=True, rows=n,
+                    table_id=tbl_id, target_id=target_id,
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            log.warning("Job %s batch write failed for table %s (%d rows): %s", job_id, tbl_id, n, e)
+            win_writes_err += 1
+            try:
+                table = Store.instance().get_table(tbl_id)
+                target_id = table.get("dbTargetId") if table else None
+                METRICS.get_job(job_id).record_write(
+                    0.0, ok=False, rows=0,
+                    table_id=tbl_id, target_id=target_id,
+                )
+                METRICS.get_job(job_id).record_error("BATCH_WRITE_ERROR", str(e))
+            except Exception:
+                pass
+        finally:
+            _batch_buffers[tbl_id] = []
+            _batch_flush_ts[tbl_id] = time.perf_counter()
+
     while not stop_event.is_set():
         t_start = time.perf_counter()
         if jtype == "continuous":
+            read_table_count = 0
+            iter_read_ms = 0.0
+            write_table_count = 0
+            iter_write_ms = 0.0
             for tbl_id in job.get("tables") or []:
                 # Read values
                 try:
                     t0 = time.perf_counter()
-                    vals = _read_mapping_values(tbl_id)
-                    win_read_ms_sum += (time.perf_counter() - t0) * 1000.0
+                    vals = _read_mapping_values(tbl_id, job_id=job_id)
+                    read_ms = (time.perf_counter() - t0) * 1000.0
+                    log.info("Job %s [READ] table=%s elapsed_ms=%.2f", job_id, tbl_id, read_ms)
+                    win_read_ms_sum += read_ms
                     win_reads_ok += 1
-                    METRICS.get_job(job_id).record_read((time.perf_counter() - t0) * 1000.0, ok=True)
+                    read_table_count += 1
+                    iter_read_ms += read_ms
+                    
+                    METRICS.get_job(job_id).record_read(read_ms, ok=True)
                 except Exception as e:
                     log.warning("Job %s read failed for table %s: %s", job_id, tbl_id, e)
                     win_reads_err += 1
@@ -498,41 +639,82 @@ def _run_job_loop(job_id: str):
                         pass
                     continue
                 # Write values
-                try:
-                    engine = _db_engine_for_table(tbl_id)
-                    table = Store.instance().get_table(tbl_id)
-                    logical = table.get("name") if table else None
-                    if not logical:
-                        continue
-                    ident = _physical_ident(engine, logical)
-                    cols = ["timestamp_utc"] + list(vals.keys())
-                    placeholders = ",".join([":ts"] + [f":{k}" for k in vals.keys()])
-                    params = {"ts": _now_ist_iso(), **vals}
-                    col_list = ",".join(cols)
-                    sql = f"INSERT INTO {ident['qualified']} ({col_list}) VALUES ({placeholders})"
-                    t1 = time.perf_counter()
-                    with engine.begin() as conn:
-                        conn.execute(text(sql), params)
-                    win_write_ms_sum += (time.perf_counter() - t1) * 1000.0
-                    win_writes_ok += 1
+                t_write_start = time.perf_counter()
+                if not use_batching:
+                    # ---- Original single-row path ----
                     try:
-                        target_id = table.get("dbTargetId") if table else None
-                        METRICS.get_job(job_id).record_write((time.perf_counter() - t1) * 1000.0, ok=True, rows=1, table_id=tbl_id, target_id=target_id)
-                    except Exception:
-                        pass
-                except Exception as e:
-                    log.warning("Job %s write failed for table %s: %s", job_id, tbl_id, e)
-                    win_writes_err += 1
-                    try:
+                        t_resolve = time.perf_counter()
+                        engine = _db_engine_for_table(tbl_id)
                         table = Store.instance().get_table(tbl_id)
-                        target_id = table.get("dbTargetId") if table else None
-                        METRICS.get_job(job_id).record_write((time.perf_counter() - t_start) * 1000.0, ok=False, rows=0, table_id=tbl_id, target_id=target_id)
-                        METRICS.get_job(job_id).record_error("WRITE_ERROR", str(e))
-                    except Exception:
-                        pass
+                        logical = table.get("name") if table else None
+                        if not logical:
+                            continue
+                        ident = _physical_ident(engine, logical)
+                        resolve_ms = (time.perf_counter() - t_resolve) * 1000.0
+                        log.info("Job %s [WRITE_DETAIL] table=%s [RESOLVE] elapsed_ms=%.2f", job_id, tbl_id, resolve_ms)
+                        t_build = time.perf_counter()
+                        cols = ["timestamp_utc"] + list(vals.keys())
+                        placeholders = ",".join([":ts"] + [f":{k}" for k in vals.keys()])
+                        params = {"ts": _now_ist_iso(), **vals}
+                        col_list = ",".join(cols)
+                        sql = f"INSERT INTO {ident['qualified']} ({col_list}) VALUES ({placeholders})"
+                        build_ms = (time.perf_counter() - t_build) * 1000.0
+                        log.info("Job %s [WRITE_DETAIL] table=%s [SQL_BUILD] cols=%d elapsed_ms=%.2f", job_id, tbl_id, len(cols), build_ms)
+                        t1 = time.perf_counter()
+                        with engine.begin() as conn:
+                            conn.execute(text(sql), params)
+                        write_ms = (time.perf_counter() - t1) * 1000.0
+                        log.info("Job %s [WRITE_DETAIL] table=%s [DB_EXECUTE] elapsed_ms=%.2f", job_id, tbl_id, write_ms)
+                        win_write_ms_sum += write_ms
+                        win_writes_ok += 1
+                        write_table_count += 1
+                        iter_write_ms += write_ms
+                        log.info("Job %s [WRITE] table=%s elapsed_ms=%.2f", job_id, tbl_id, write_ms)
+                        try:
+                            target_id = table.get("dbTargetId") if table else None
+                            METRICS.get_job(job_id).record_write(write_ms, ok=True, rows=1, table_id=tbl_id, target_id=target_id)
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        log.warning("Job %s write failed for table %s: %s", job_id, tbl_id, e)
+                        win_writes_err += 1
+                        try:
+                            table = Store.instance().get_table(tbl_id)
+                            target_id = table.get("dbTargetId") if table else None
+                            METRICS.get_job(job_id).record_write((time.perf_counter() - t_start) * 1000.0, ok=False, rows=0, table_id=tbl_id, target_id=target_id)
+                            METRICS.get_job(job_id).record_error("WRITE_ERROR", str(e))
+                        except Exception:
+                            pass
+                else:
+                    # ---- Buffered batch path ----
+                    row = {"timestamp_utc": _now_ist_iso(), **vals}
+                    buf = _batch_buffers.setdefault(tbl_id, [])
+                    buf.append(row)
+                    _batch_flush_ts.setdefault(tbl_id, time.perf_counter())
+                    count_trigger = len(buf) >= batch_count
+                    time_trigger = (batch_ms > 0) and ((time.perf_counter() - _batch_flush_ts[tbl_id]) >= batch_ms / 1000.0)
+                    flushed = count_trigger or time_trigger
+                    if flushed:
+                        _flush_batch(tbl_id)
+                    batch_ms_elapsed = (time.perf_counter() - t_write_start) * 1000.0
+                    write_table_count += 1
+                    iter_write_ms += batch_ms_elapsed
+                    log.info("Job %s [BATCH_APPEND] table=%s buf_size=%d flush=%s elapsed_ms=%.2f", job_id, tbl_id, len(buf), flushed, batch_ms_elapsed)
+            # Time-based flush for tables that didn't hit count threshold
+            if use_batching and batch_ms > 0:
+                now_flush = time.perf_counter()
+                for tbl_id in list(_batch_buffers.keys()):
+                    if _batch_buffers.get(tbl_id):
+                        if (now_flush - _batch_flush_ts.get(tbl_id, 0)) >= batch_ms / 1000.0:
+                            _flush_batch(tbl_id)
+                            log.info("Job %s [BATCH_FLUSH_TIME] table=%s", job_id, tbl_id)
+            log.info("Job %s [READ_TOTAL] tables=%d elapsed_ms=%.2f", job_id, read_table_count, iter_read_ms)
+            log.info("Job %s [WRITE_TOTAL] tables=%d elapsed_ms=%.2f", job_id, write_table_count, iter_write_ms)
         else:
             # Trigger jobs: evaluate conditions; when true, log one row of all mapped columns
             triggers = job.get("triggers") or []
+            t_trig_phase = time.perf_counter()
+            trig_table_count = 0
             # Group triggers by table id
             by_tbl: Dict[str, List[Dict[str, Any]]] = {}
             for tr in triggers:
@@ -541,12 +723,15 @@ def _run_job_loop(job_id: str):
                     continue
                 by_tbl.setdefault(tid, []).append(tr)
             for tbl_id, tlist in by_tbl.items():
+                trig_table_count += 1
                 try:
                     t0 = time.perf_counter()
-                    vals = _read_mapping_values(tbl_id)
-                    win_read_ms_sum += (time.perf_counter() - t0) * 1000.0
+                    vals = _read_mapping_values(tbl_id, job_id=job_id)
+                    trig_read_ms = (time.perf_counter() - t0) * 1000.0
+                    win_read_ms_sum += trig_read_ms
                     win_reads_ok += 1
-                    METRICS.get_job(job_id).record_read((time.perf_counter() - t0) * 1000.0, ok=True)
+                    log.info("Job %s [TRIG_READ] table=%s elapsed_ms=%.2f", job_id, tbl_id, trig_read_ms)
+                    METRICS.get_job(job_id).record_read(trig_read_ms, ok=True)
                 except Exception as e:
                     log.warning("Trigger job %s read failed for table %s: %s", job_id, tbl_id, e)
                     win_reads_err += 1
@@ -557,6 +742,7 @@ def _run_job_loop(job_id: str):
                         pass
                     continue
                 try:
+                    t_eval = time.perf_counter()
                     lv = _job_last_values[job_id].setdefault(tbl_id, {})
                     should_fire = False
                     for tr in tlist:
@@ -570,6 +756,8 @@ def _run_job_loop(job_id: str):
                         if fired:
                             should_fire = True
                             break
+                    eval_ms = (time.perf_counter() - t_eval) * 1000.0
+                    log.info("Job %s [TRIG_EVAL] table=%s fired=%s elapsed_ms=%.2f", job_id, tbl_id, should_fire, eval_ms)
                     METRICS.get_job(job_id).record_trigger_eval(fired=should_fire, suppressed=False)
                     # Update last values for edge/change detection
                     for k, v in vals.items():
@@ -585,25 +773,34 @@ def _run_job_loop(job_id: str):
                         continue
                     _job_cooldowns[job_id][tbl_id] = now
                     # Write one coherent row
+                    t_resolve = time.perf_counter()
                     engine = _db_engine_for_table(tbl_id)
                     table = Store.instance().get_table(tbl_id)
                     logical = table.get("name") if table else None
                     if not logical:
                         continue
                     ident = _physical_ident(engine, logical)
+                    resolve_ms = (time.perf_counter() - t_resolve) * 1000.0
+                    log.info("Job %s [WRITE_DETAIL] table=%s [RESOLVE] elapsed_ms=%.2f", job_id, tbl_id, resolve_ms)
+                    t_build = time.perf_counter()
                     cols = ["timestamp_utc"] + list(vals.keys())
                     placeholders = ",".join([":ts"] + [f":{k}" for k in vals.keys()])
                     params = {"ts": datetime.now(timezone.utc).isoformat(), **vals}
                     col_list = ",".join(cols)
                     sql = f"INSERT INTO {ident['qualified']} ({col_list}) VALUES ({placeholders})"
+                    build_ms = (time.perf_counter() - t_build) * 1000.0
+                    log.info("Job %s [WRITE_DETAIL] table=%s [SQL_BUILD] cols=%d elapsed_ms=%.2f", job_id, tbl_id, len(cols), build_ms)
                     t1 = time.perf_counter()
                     with engine.begin() as conn:
                         conn.execute(text(sql), params)
-                    win_write_ms_sum += (time.perf_counter() - t1) * 1000.0
+                    trig_write_ms = (time.perf_counter() - t1) * 1000.0
+                    log.info("Job %s [WRITE_DETAIL] table=%s [DB_EXECUTE] elapsed_ms=%.2f", job_id, tbl_id, trig_write_ms)
+                    win_write_ms_sum += trig_write_ms
                     win_writes_ok += 1
+                    log.info("Job %s [TRIG_WRITE] table=%s elapsed_ms=%.2f", job_id, tbl_id, trig_write_ms)
                     try:
                         target_id = table.get("dbTargetId") if table else None
-                        METRICS.get_job(job_id).record_write((time.perf_counter() - t1) * 1000.0, ok=True, rows=1, table_id=tbl_id, target_id=target_id)
+                        METRICS.get_job(job_id).record_write(trig_write_ms, ok=True, rows=1, table_id=tbl_id, target_id=target_id)
                     except Exception:
                         pass
                 except Exception as e:
@@ -616,6 +813,7 @@ def _run_job_loop(job_id: str):
                         METRICS.get_job(job_id).record_error("WRITE_ERROR", str(e))
                     except Exception:
                         pass
+            log.info("Job %s [TRIG_TOTAL] tables=%d elapsed_ms=%.2f", job_id, trig_table_count, (time.perf_counter() - t_trig_phase) * 1000.0)
         # sleep remaining time
         dt = time.perf_counter() - t_start
         win_loops += 1
@@ -686,8 +884,17 @@ def _run_job_loop(job_id: str):
             win_overruns = 0
             loop_samples_ms.clear()
         to_sleep = max(0.0, interval - dt)
+        log.info("Job %s [LOOP] total_ms=%.2f sleep_ms=%.2f", job_id, dt * 1000.0, to_sleep * 1000.0)
         if to_sleep > 0:
             stop_event.wait(timeout=to_sleep)
+    # Flush remaining buffered rows on stop/pause
+    if use_batching:
+        for tbl_id in list(_batch_buffers.keys()):
+            if _batch_buffers.get(tbl_id):
+                try:
+                    _flush_batch(tbl_id)
+                except Exception as e:
+                    log.warning("Job %s final flush failed for table %s: %s", job_id, tbl_id, e)
 
 
 @router.get("")
@@ -809,7 +1016,7 @@ def dry_run(job_id: str) -> Dict[str, Any]:
     samples = []
     for tbl_id in job.get("tables") or []:
         try:
-            vals = _read_mapping_values(tbl_id)
+            vals = _read_mapping_values(tbl_id, job_id=job_id)
             samples.append({"tableId": tbl_id, "values": vals, "ts": datetime.now(timezone.utc).isoformat()})
         except Exception as e:
             samples.append({"tableId": tbl_id, "error": str(e)})
@@ -988,7 +1195,7 @@ def backfill(job_id: str) -> Dict[str, Any]:
     wrote = 0
     for tbl_id in job.get("tables") or []:
         try:
-            vals = _read_mapping_values(tbl_id)
+            vals = _read_mapping_values(tbl_id, job_id=job_id)
             engine = _db_engine_for_table(tbl_id)
             table = Store.instance().get_table(tbl_id)
             name = table.get("name") if table else None

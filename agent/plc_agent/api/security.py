@@ -26,16 +26,21 @@ def _get_jwks_client() -> PyJWKClient:
 
 def decode_jwt(token: str) -> Dict[str, Any]:
     """Validate and decode a Keycloak JWT token. Returns claims dict."""
-    client = _get_jwks_client()
-    signing_key = client.get_signing_key_from_jwt(token)
-    claims = jwt.decode(
-        token,
-        signing_key.key,
-        algorithms=["RS256"],
-        issuer=KEYCLOAK_ALLOWED_ISSUERS,
-        options={"verify_aud": False},
-    )
-    return claims
+    log.info("decode_jwt: JWKS_URL=%s, ALLOWED_ISSUERS=%s", KEYCLOAK_JWKS_URL, KEYCLOAK_ALLOWED_ISSUERS)
+    try:
+        client = _get_jwks_client()
+        signing_key = client.get_signing_key_from_jwt(token)
+        claims = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            issuer=KEYCLOAK_ALLOWED_ISSUERS,
+            options={"verify_aud": False},
+        )
+        return claims
+    except Exception as e:
+        log.error("decode_jwt FAILED: %s: %s", type(e).__name__, e)
+        raise
 
 
 def extract_bearer_token(authorization: Optional[str]) -> Optional[str]:

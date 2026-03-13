@@ -88,8 +88,33 @@ def tcp_test(params: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.post("/modbus/test")
 def test_modbus(params: Dict[str, Any]) -> Dict[str, Any]:
-    host = params.get("host") or params.get("ip") or "127.0.0.1"
-    port = int(params.get("port", 502))
+    # Resolve host/port: deviceId -> gateway.host > params.host
+    host = None
+    port = None
+    device_id = params.get("deviceId")
+    if device_id:
+        from ..store import Store
+        dev = Store.instance().get_device(device_id)
+        if dev:
+            gw_id = dev.get("gatewayId")
+            if gw_id:
+                gw = Store.instance().get_gateway(gw_id)
+                if gw and gw.get("host"):
+                    host = gw["host"]
+            if not host:
+                dev_params = dev.get("params") or {}
+                host = dev_params.get("host") or dev_params.get("ip")
+            # Get port from device
+            port = dev.get("port")
+            if port is None:
+                dev_params = dev.get("params") or {}
+                port = dev_params.get("port")
+    if not host:
+        host = params.get("host") or params.get("ip") or "127.0.0.1"
+    if port is None:
+        port = int(params.get("port", 502))
+    else:
+        port = int(port)
     unit = int(params.get("unitId", 1))
     address = int(params.get("address", 1))
     count = int(params.get("count", 1))
@@ -118,7 +143,28 @@ def test_modbus(params: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.post("/opcua/test")
 def test_opcua(params: Dict[str, Any]) -> Dict[str, Any]:
-    endpoint = params.get("endpoint", "opc.tcp://127.0.0.1:4840")
+    # Resolve endpoint: deviceId -> gateway.host > params.endpoint
+    endpoint = None
+    device_id = params.get("deviceId")
+    if device_id:
+        from ..store import Store
+        dev = Store.instance().get_device(device_id)
+        if dev:
+            gw_id = dev.get("gatewayId")
+            if gw_id:
+                gw = Store.instance().get_gateway(gw_id)
+                if gw and gw.get("host"):
+                    gw_host = gw["host"]
+                    if gw_host.startswith("opc.tcp://"):
+                        endpoint = gw_host
+                    else:
+                        gw_port = (gw.get("ports") or [4840])[0] or 4840
+                        endpoint = f"opc.tcp://{gw_host}:{gw_port}"
+            if not endpoint:
+                dev_params = dev.get("params") or {}
+                endpoint = dev_params.get("endpoint")
+    if not endpoint:
+        endpoint = params.get("endpoint", "opc.tcp://127.0.0.1:4840")
     if isinstance(endpoint, str) and "0.0.0.0" in endpoint:
         endpoint = endpoint.replace("0.0.0.0", "127.0.0.1")
     nodeid = params.get("nodeId")
@@ -152,7 +198,28 @@ def test_opcua(params: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.post("/opcua/browse")
 def opcua_browse(params: Dict[str, Any]) -> Dict[str, Any]:
-    endpoint = params.get("endpoint", "opc.tcp://127.0.0.1:4840/freeopcua/server/")
+    # Resolve endpoint: deviceId -> gateway.host > params.endpoint
+    endpoint = None
+    device_id = params.get("deviceId")
+    if device_id:
+        from ..store import Store
+        dev = Store.instance().get_device(device_id)
+        if dev:
+            gw_id = dev.get("gatewayId")
+            if gw_id:
+                gw = Store.instance().get_gateway(gw_id)
+                if gw and gw.get("host"):
+                    gw_host = gw["host"]
+                    if gw_host.startswith("opc.tcp://"):
+                        endpoint = gw_host
+                    else:
+                        gw_port = (gw.get("ports") or [4840])[0] or 4840
+                        endpoint = f"opc.tcp://{gw_host}:{gw_port}"
+            if not endpoint:
+                dev_params = dev.get("params") or {}
+                endpoint = dev_params.get("endpoint")
+    if not endpoint:
+        endpoint = params.get("endpoint", "opc.tcp://127.0.0.1:4840/freeopcua/server/")
     if isinstance(endpoint, str) and "0.0.0.0" in endpoint:
         endpoint = endpoint.replace("0.0.0.0", "127.0.0.1")
     nodeid = params.get("nodeId") or "i=85"  # RootFolder
@@ -188,6 +255,36 @@ def opcua_browse(params: Dict[str, Any]) -> Dict[str, Any]:
 def list_gateways() -> Dict[str, Any]:
     from ..store import Store
     return {"items": Store.instance().list_gateways()}
+
+
+@router.get("/gateways_with_devices")
+def list_gateways_with_devices() -> Dict[str, Any]:
+    """Get all gateways with their linked devices."""
+    from ..store import Store
+    st = Store.instance()
+
+    gateways = st.list_gateways()
+    devices = st.list_devices()
+
+    # Build a map of gateway_id -> list of devices
+    gateway_devices_map: Dict[str, List[Dict[str, Any]]] = {}
+    for device in devices:
+        gateway_id = device.get("gatewayId")
+        if gateway_id:
+            if gateway_id not in gateway_devices_map:
+                gateway_devices_map[gateway_id] = []
+            gateway_devices_map[gateway_id].append(device)
+
+    # Attach devices to each gateway
+    result = []
+    for gateway in gateways:
+        gw_id = gateway.get("id")
+        gateway_with_devices = {**gateway}
+        gateway_with_devices["devices"] = gateway_devices_map.get(gw_id, [])
+        gateway_with_devices["deviceCount"] = len(gateway_with_devices["devices"])
+        result.append(gateway_with_devices)
+
+    return {"items": result}
 
 
 @router.post("/gateways")

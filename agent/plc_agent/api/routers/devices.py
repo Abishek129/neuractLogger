@@ -28,9 +28,21 @@ def create_device(payload: Dict[str, Any]) -> Dict[str, Any]:
     for d in items:
         if (d.get("name") or "").lower() == name.lower():
             return {"success": True, "item": d}
-    proto = (payload.get("protocol") or "").lower()
+    proto = (payload.get("protocol") or "").strip().lower()
+    if proto and not Store.instance().is_valid_protocol(proto):
+        raise HTTPException(
+            status_code=400,
+            detail=f"PROTOCOL_INVALID: '{proto}'. Valid: {', '.join(Store.instance().list_protocol_types())}"
+        )
     params = payload.get("params") or {}
-    ok, latency, err = Store.instance().test_device_params(proto, params)
+    extra = {}
+    if payload.get("gatewayId"):
+        extra["gatewayId"] = payload["gatewayId"]
+    if payload.get("port") is not None:
+        extra["port"] = payload["port"]
+    if payload.get("unitId") is not None:
+        extra["unitId"] = payload["unitId"]
+    ok, latency, err = Store.instance().test_device_params(proto or "modbus", params, **extra)
     item = Store.instance().add_device(payload)
     if ok:
         Store.instance().mark_manual_disconnect(item["id"], False)
@@ -43,8 +55,8 @@ def create_device(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.put("/{dev_id}")
 def update_device(dev_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
-    # Allow updating name and autoReconnect
-    allowed = {k: v for k, v in patch.items() if k in ("name", "autoReconnect")}
+    # Allow updating name, autoReconnect, unitId, port, and gatewayId
+    allowed = {k: v for k, v in patch.items() if k in ("name", "autoReconnect", "unitId", "port", "gatewayId")}
     item = Store.instance().update_device_metadata(dev_id, allowed)
     if not item:
         raise HTTPException(status_code=404, detail="DEVICE_NOT_FOUND")
