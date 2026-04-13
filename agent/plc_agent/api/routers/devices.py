@@ -4,7 +4,9 @@ import time
 from typing import Dict, Any
 
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from ..permissions import require_logger_write
 
 from ..store import Store
 
@@ -19,7 +21,7 @@ def list_devices() -> Dict[str, Any]:
     return {"items": Store.instance().list_devices()}
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_logger_write)])
 def create_device(payload: Dict[str, Any]) -> Dict[str, Any]:
     name = (payload.get("name") or "").strip()
     if not name:
@@ -53,7 +55,7 @@ def create_device(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"success": ok, "item": stored, "error": err}
 
 
-@router.put("/{dev_id}")
+@router.put("/{dev_id}", dependencies=[Depends(require_logger_write)])
 def update_device(dev_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
     # Allow updating name, autoReconnect, unitId, port, and gatewayId
     allowed = {k: v for k, v in patch.items() if k in ("name", "autoReconnect", "unitId", "port", "gatewayId")}
@@ -71,7 +73,7 @@ def delete_device(dev_id: str) -> Dict[str, Any]:
     return {"success": True}
 
 
-@router.post("/{dev_id}/connect")
+@router.post("/{dev_id}/connect", dependencies=[Depends(require_logger_write)])
 def connect_device(dev_id: str) -> Dict[str, Any]:
     raw = Store.instance().get_device(dev_id)
     if not raw:
@@ -93,7 +95,7 @@ def connect_device(dev_id: str) -> Dict[str, Any]:
     return {"success": True, "latencyMs": latency}
 
 
-@router.post("/{dev_id}/disconnect")
+@router.post("/{dev_id}/disconnect", dependencies=[Depends(require_logger_write)])
 def disconnect_device(dev_id: str) -> Dict[str, Any]:
     item = Store.instance().get_device(dev_id)
     if not item:
@@ -107,7 +109,7 @@ def disconnect_device(dev_id: str) -> Dict[str, Any]:
     return {"success": True}
 
 
-@router.post("/{dev_id}/quick_test")
+@router.post("/{dev_id}/quick_test", dependencies=[Depends(require_logger_write)])
 def quick_test(dev_id: str) -> Dict[str, Any]:
     item = Store.instance().get_device(dev_id)
     if not item:

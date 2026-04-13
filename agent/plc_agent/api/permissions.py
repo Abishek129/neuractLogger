@@ -81,6 +81,18 @@ async def require_logger_read(
     return claims
 
 
+async def require_logger_write(
+    claims: Dict[str, Any] = Depends(get_claims),
+) -> Dict[str, Any]:
+    """Dependency: requires valid JWT + logger-write role."""
+    if not has_logger_write_role(claims):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"success": False, "error": "INSUFFICIENT_ROLE", "message": "logger-write role required"},
+        )
+    return claims
+
+
 async def require_safe_or_write(
     request: Request,
     claims: Dict[str, Any] = Depends(get_claims),

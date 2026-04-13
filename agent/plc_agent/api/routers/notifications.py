@@ -28,6 +28,39 @@ async def _publish_to_redis(channel: str, payload: dict) -> None:
         log.warning("Redis publish failed: %s", e)
 
 
+async def notify_job_started(job_id: str, started_by: str) -> None:
+    """Create a 'job' notification for every user with the logger_read realm role.
+
+    Called as a BackgroundTask from start_job endpoints.
+    """
+    try:
+        from ..keycloak_admin import get_service_account_token, get_users_by_realm_role
+
+        token = await get_service_account_token()
+        users = await get_users_by_realm_role(token, "logger_read")
+
+        message = f"Job {job_id} was started by {started_by}"
+
+        for user in users:
+            user_id = user.get("id", "unknown")
+            try:
+                notif = create_notification("job", message, user_id)
+                ws_payload = {
+                    "type": notif["type"],
+                    "action": "create",
+                    "notification_id": notif["id"],
+                    "message": notif["message"],
+                    "user": notif["user"],
+                    "read": notif["read"],
+                    "time": notif["time"],
+                }
+                await _publish_to_redis("logger_read", ws_payload)
+            except Exception as e:
+                log.warning("Failed to create notification for user %s: %s", user_id, e)
+    except Exception as e:
+        log.error("notify_job_started failed: %s", e)
+
+
 @router.post("/notifications", status_code=201)
 async def create(
     payload: Dict[str, Any],

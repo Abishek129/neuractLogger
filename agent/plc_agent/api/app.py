@@ -21,8 +21,8 @@ from .routers import notifications as notifications_router
 from .routers import ws_notifications as ws_notifications_router
 from .routers import protocol_types as protocol_types_router
 from .routers import bulk_import as bulk_import_router
-# from fastapi import Depends
-# from .permissions import require_safe_or_write
+from fastapi import Depends
+from .permissions import require_logger_write
 from .store import Store
 from ..metrics import metrics as METRICS
 
@@ -93,11 +93,15 @@ def create_app() -> FastAPI:
         "https://tauri.localhost",
         "http://localhost:1420",
         "http://127.0.0.1:1420",
+        "http://100.90.185.31:5173",
+        "http://100.90.185.31:5175",
+        "http://100.90.185.31:5180",
+        "http://100.90.185.31:9847",
     ]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allow_origins,
-        allow_origin_regex=r"^(https?://tauri\.localhost(:\d+)?|(app|tauri)://.*)$",
+        allow_origin_regex=r"^(https?://tauri\.localhost(:\d+)?|(app|tauri)://.*|https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|100\.90\.185\.31)(:\d+)?)$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

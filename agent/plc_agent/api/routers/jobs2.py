@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import struct
 import threading
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+
+from ..permissions import require_logger_write
+from .notifications import notify_job_started
 from sqlalchemy import create_engine, text
 
 from ..store import Store
@@ -107,6 +111,7 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
     proto = (dev.get("protocol") or "").lower()
     params = dev.get("params") or {}
     values: Dict[str, Any] = {}
+    log.info("_read_mapping_values: table=%s device=%s proto=%s rows=%d", table_id, device_id, proto, len(rows))
     if proto == "opcua":
         try:
             import opcua  # type: ignore
@@ -152,9 +157,62 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
             _drop_opcua_client(endpoint)
             raise
     elif proto == "modbus":
-        # TODO: Implement TCP/RTU reads. For now, stub None values.
-        for field, spec in rows.items():
-            values[field] = None
+        gw_id = dev.get("gatewayId") or dev.get("gateway_id")
+        if not gw_id:
+            raise RuntimeError("GATEWAY_NOT_BOUND")
+        gw = store.get_gateway(gw_id)
+        if not gw:
+            raise RuntimeError("GATEWAY_NOT_FOUND")
+        host = gw.get("host")
+        port = int(dev.get("port") or 502)
+        from pymodbus.client import ModbusTcpClient
+        client = ModbusTcpClient(host=host, port=port)
+        if not client.connect():
+            raise RuntimeError(f"MODBUS_CONNECT_FAILED: {host}:{port}")
+        try:
+            _ENC_MAP = {
+                "float32": (2, ">f"), "float": (2, ">f"),
+                "uint16": (1, ">H"), "uint16_enum": (1, ">H"), "bool16": (1, ">H"),
+                "int16": (1, ">h"), "uint32": (2, ">I"), "int32": (2, ">i"),
+                "float64": (4, ">d"),
+            }
+            unit_id = int(dev.get("unitId") or dev.get("unit_id") or 1)
+            for field, spec in rows.items():
+                addr_raw = spec.get("address")
+                if addr_raw is None or addr_raw == "":
+                    continue
+                try:
+                    address = int(addr_raw)
+                    encoding = (spec.get("encoding") or spec.get("dataType") or "float32").lower()
+                    reg_count = _ENC_MAP.get(encoding, (1, ">H"))[0]
+                    rr = client.read_holding_registers(address=address, count=reg_count, device_id=unit_id)
+                    if hasattr(rr, "isError") and rr.isError():
+                        values[field] = None
+                        continue
+                    info = _ENC_MAP.get(encoding)
+                    if info and len(rr.registers) >= info[0]:
+                        raw = b"".join(r.to_bytes(2, "big") for r in rr.registers[:info[0]])
+                        val = struct.unpack(info[1], raw)[0]
+                    else:
+                        val = rr.registers[0] if rr.registers else None
+                    # Type coercion
+                    if encoding == "bool16":
+                        val = bool(int(val)) if val is not None else None
+                    elif encoding == "uint16_enum":
+                        val = int(val) if val is not None else None
+                    # Scale
+                    sc = spec.get("scale")
+                    try:
+                        if sc is not None and isinstance(val, (int, float)):
+                            val = float(val) * float(sc)
+                    except Exception:
+                        pass
+                    values[field] = val
+                except Exception as e:
+                    log.warning("Modbus dry_run read failed field=%s err=%s", field, e)
+                    values[field] = None
+        finally:
+            client.close()
     else:
         raise RuntimeError("PROTOCOL_NOT_SUPPORTED")
     return values
@@ -165,7 +223,7 @@ def list_jobs() -> Dict[str, Any]:
     return {"items": Store.instance().list_jobs()}
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_logger_write)])
 def create_job(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         job = Store.instance().create_job(payload)
@@ -174,18 +232,23 @@ def create_job(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post("/{job_id}/start")
-def start_job(job_id: str) -> Dict[str, Any]:
+@router.post("/{job_id}/start", dependencies=[Depends(require_logger_write)])
+def start_job(job_id: str, request: Request, background_tasks: BackgroundTasks) -> Dict[str, Any]:
     job = Store.instance().get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
     if (job.get("status") or "").lower() == "running":
         return {"success": True, "message": "already_running"}
     Store.instance().set_job_status(job_id, "running")
+
+    claims = getattr(request.state, "auth", {})
+    started_by = claims.get("preferred_username", "unknown")
+    background_tasks.add_task(notify_job_started, job_id, started_by)
+
     return {"success": True, "message": "started"}
 
 
-@router.post("/{job_id}/pause")
+@router.post("/{job_id}/pause", dependencies=[Depends(require_logger_write)])
 def pause_job(job_id: str) -> Dict[str, Any]:
     if not Store.instance().get_job(job_id):
         raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
@@ -193,7 +256,7 @@ def pause_job(job_id: str) -> Dict[str, Any]:
     return {"success": True, "message": "paused"}
 
 
-@router.post("/{job_id}/stop")
+@router.post("/{job_id}/stop", dependencies=[Depends(require_logger_write)])
 def stop_job(job_id: str) -> Dict[str, Any]:
     if not Store.instance().get_job(job_id):
         raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
@@ -201,7 +264,7 @@ def stop_job(job_id: str) -> Dict[str, Any]:
     return {"success": True, "message": "stopped"}
 
 
-@router.post("/stop_all")
+@router.post("/stop_all", dependencies=[Depends(require_logger_write)])
 def stop_all_jobs() -> Dict[str, Any]:
     store = Store.instance()
     jobs = store.list_jobs()
@@ -215,13 +278,14 @@ def stop_all_jobs() -> Dict[str, Any]:
     return {"success": True, "stopped": stopped}
 
 
-@router.post("/{job_id}/dry_run")
+@router.post("/{job_id}/dry_run", dependencies=[Depends(require_logger_write)])
 def dry_run(job_id: str) -> Dict[str, Any]:
     job = Store.instance().get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
     samples = []
-    for tbl_id in job.get("tables") or []:
+    tables = job.get("tables") or []
+    for tbl_id in tables:
         try:
             vals = _read_mapping_values(tbl_id)
             samples.append({"tableId": tbl_id, "values": vals, "ts": datetime.now(timezone.utc).isoformat()})
@@ -275,7 +339,7 @@ def job_runs(job_id: str, frm: Optional[str] = None, to: Optional[str] = None) -
     return {"ok": True, "data": items}
 
 
-@router.post("/{job_id}/backfill")
+@router.post("/{job_id}/backfill", dependencies=[Depends(require_logger_write)])
 def backfill(job_id: str) -> Dict[str, Any]:
     job = Store.instance().get_job(job_id)
     if not job:

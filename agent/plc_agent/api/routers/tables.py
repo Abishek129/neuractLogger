@@ -4,7 +4,9 @@ import re
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+
+from ..permissions import require_logger_write
 
 from sqlalchemy import (
     create_engine,
@@ -17,6 +19,7 @@ from sqlalchemy import (
     String,
     inspect,
     text,
+    REAL,
 )
 
 from ..store import Store
@@ -80,12 +83,12 @@ def _engine_for_target(target_id: Optional[str]):
 
 def _to_sa_type(ftype: str):
     k = (ftype or "").lower()
-    if k in ("int", "integer"):
-        return Integer
-    if k in ("float", "double", "number"):
-        return Float
-    if k in ("bool", "boolean"):
-        return Boolean
+    if k in ("int", "integer", "uint16", "uint16_enum", "int16", "uint32", "int32", "uint64", "int64"):
+        return REAL
+    if k in ("float", "double", "number", "float32", "float64"):
+        return REAL
+    if k in ("bool", "boolean", "bool16"):
+        return REAL
     return String
 
 
@@ -171,7 +174,7 @@ def _physical_ident(engine, logical_name: str) -> Dict[str, str]:
     return {"schema": None, "name": name, "qualified": name}
 
 
-@router.post("/bulk_create")
+@router.post("/bulk_create", dependencies=[Depends(require_logger_write)])
 def bulk_create(payload: Dict[str, Any]) -> Dict[str, Any]:
     parent_id = (payload.get("parentSchemaId") or payload.get("schemaId") or "").strip()
     if not parent_id:
@@ -206,15 +209,18 @@ def bulk_create(payload: Dict[str, Any]) -> Dict[str, Any]:
             normalized.append(safe)
 
     db_target_id = payload.get("dbTargetId") or Store.instance().get_default_db_target()
+    device_id = payload.get("deviceId") or payload.get("device_id") or None
+    if device_id and not Store.instance().get_device(device_id):
+        raise HTTPException(status_code=404, detail="DEVICE_NOT_FOUND")
 
-    created = Store.instance().add_tables_bulk(parent_id, normalized, db_target_id)
+    created = Store.instance().add_tables_bulk(parent_id, normalized, db_target_id, device_id=device_id)
     resp: Dict[str, Any] = {"success": True, "message": "tables_created", "count": len(created), "items": created}
     if warnings:
         resp["warnings"] = warnings
     return resp
 
 
-@router.post("/bulk_update_target")
+@router.post("/bulk_update_target", dependencies=[Depends(require_logger_write)])
 def bulk_update_target(payload: Dict[str, Any]) -> Dict[str, Any]:
     db_target_id = payload.get("dbTargetId")
     if not db_target_id:
@@ -440,6 +446,16 @@ def discover(
     return {"success": True, "planned": planned, "migrated": migrated}
 
 
+@router.post("/{table_id}/migrate", dependencies=[Depends(require_logger_write)])
+def migrate_single(table_id: str) -> Dict[str, Any]:
+    """Migrate a single table by path parameter."""
+    result = migrate({"ids": [table_id]})
+    items = result.get("items", [])
+    if items and "error" in items[0]:
+        raise HTTPException(status_code=404, detail=items[0]["error"])
+    return {"success": True, "item": items[0] if items else {}}
+
+
 @router.get("/{table_id}")
 def get_table_details(table_id: str) -> Dict[str, Any]:
     t = Store.instance().get_table(table_id)
@@ -468,7 +484,7 @@ def get_table_details(table_id: str) -> Dict[str, Any]:
     }
 
 
-@router.post("/dry_run_ddl")
+@router.post("/dry_run_ddl", dependencies=[Depends(require_logger_write)])
 def dry_run(payload: Dict[str, Any]) -> Dict[str, Any]:
     ids: List[str] = payload.get("ids") or []
     if not isinstance(ids, list) or not ids:
@@ -512,7 +528,7 @@ def _sa_type_to_sql(t):
     return "TEXT"
 
 
-@router.post("/migrate")
+@router.post("/migrate", dependencies=[Depends(require_logger_write)])
 def migrate(payload: Dict[str, Any]) -> Dict[str, Any]:
     ids: List[str] = payload.get("ids") or ([] if not payload.get("id") else [payload.get("id")])
     if not ids:
@@ -576,6 +592,110 @@ def migrate(payload: Dict[str, Any]) -> Dict[str, Any]:
             Store.instance().set_table_status(tid, "migrated", migrated_at_iso=_now_ist_iso())
             results.append({"id": tid, "name": ident["qualified"], "status": "updated"})
     return {"success": True, "items": results}
+
 IST = timezone(timedelta(hours=5, minutes=30))
 def _now_ist_iso() -> str:
     return datetime.now(IST).replace(microsecond=0).isoformat()
+
+
+# ---------- DELETE /tables/{table_id} ----------
+@router.delete("/{table_id}", dependencies=[Depends(require_logger_write)])
+def delete_table(
+    table_id: str,
+    dropPhysical: bool = Query(False),
+) -> Dict[str, Any]:
+    t = Store.instance().get_table(table_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
+    # Safety: reject if table is in a running job
+    for job in Store.instance().list_jobs():
+        if table_id in (job.get("tables") or []) and (job.get("status") or "").lower() in ("running", "started"):
+            raise HTTPException(status_code=409, detail="TABLE_HAS_RUNNING_JOBS")
+    physical_dropped = False
+    if dropPhysical and (t.get("status") or "").lower() == "migrated":
+        try:
+            engine = _engine_for_target(t.get("dbTargetId"))
+            ident = _physical_ident(engine, t.get("name"))
+            with engine.begin() as conn:
+                conn.execute(text(f"DROP TABLE IF EXISTS {ident['qualified']}"))
+                # Clean mapping rows from user DB
+                conn.execute(text(f"DELETE FROM {NEURACT_SCHEMA}.device_mappings WHERE table_name=:tn"), {"tn": t.get("name")})
+            physical_dropped = True
+        except Exception as e:
+            log.warning("delete_table: physical drop failed table=%s err=%s", table_id, e)
+    Store.instance().delete_table(table_id)
+    return {"success": True, "message": "table_deleted", "physicalDropped": physical_dropped}
+
+
+# ---------- PATCH /tables/{table_id} ----------
+@router.patch("/{table_id}", dependencies=[Depends(require_logger_write)])
+def patch_table(table_id: str, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    t = Store.instance().get_table(table_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
+    patch: Dict[str, Any] = {}
+    warnings: List[str] = []
+    if "name" in payload:
+        new_name = (payload["name"] or "").strip()
+        if not new_name or not _sql_safe(new_name):
+            raise HTTPException(status_code=400, detail="INVALID_NAME")
+        if (t.get("status") or "").lower() == "migrated":
+            warnings.append("Table is migrated; name change requires re-migration")
+        patch["name"] = new_name
+    if "schemaId" in payload:
+        sid = payload["schemaId"]
+        if sid and not Store.instance().get_schema(sid):
+            raise HTTPException(status_code=400, detail="SCHEMA_NOT_FOUND")
+        patch["schemaId"] = sid
+        warnings.append("Schema changed; existing mappings may need update")
+    if "dbTargetId" in payload:
+        patch["dbTargetId"] = payload["dbTargetId"]
+        if (t.get("status") or "").lower() == "migrated":
+            warnings.append("DB target changed; re-migration needed")
+    if not patch:
+        raise HTTPException(status_code=400, detail="NO_FIELDS_TO_UPDATE")
+    updated = Store.instance().update_table(table_id, patch)
+    resp: Dict[str, Any] = {"success": True, "item": updated}
+    if warnings:
+        resp["warnings"] = warnings
+    return resp
+
+
+# ---------- POST /tables/{table_id}/bind_device ----------
+@router.post("/{table_id}/bind_device", dependencies=[Depends(require_logger_write)])
+def bind_device(table_id: str, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    t = Store.instance().get_table(table_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
+    device_id = payload.get("deviceId") or payload.get("device_id")
+    if not device_id:
+        raise HTTPException(status_code=400, detail="DEVICE_ID_REQUIRED")
+    dev = Store.instance().get_device(device_id)
+    if not dev:
+        raise HTTPException(status_code=404, detail="DEVICE_NOT_FOUND")
+    Store.instance().set_table_device_binding(table_id, device_id)
+    return {"ok": True, "success": True, "message": "device_bound", "table_id": table_id, "device_id": device_id, "device_name": dev.get("name", "")}
+
+
+# ---------- POST /tables/{table_id}/unbind_device ----------
+@router.post("/{table_id}/unbind_device", dependencies=[Depends(require_logger_write)])
+def unbind_device(table_id: str) -> Dict[str, Any]:
+    t = Store.instance().get_table(table_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
+    Store.instance().set_table_device_binding(table_id, None)
+    return {"ok": True, "success": True, "message": "device_unbound", "table_id": table_id, "device_id": None}
+
+
+# ---------- POST /tables/{table_id}/mappings/bulk ----------
+@router.post("/{table_id}/mappings/bulk", dependencies=[Depends(require_logger_write)])
+def table_mappings_bulk(table_id: str, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    from .mappings import bulk_apply
+    return bulk_apply(table_id, payload)
+
+
+# ---------- POST /tables/{table_id}/mappings/validate ----------
+@router.post("/{table_id}/mappings/validate", dependencies=[Depends(require_logger_write)])
+def table_mappings_validate(table_id: str, payload: Dict[str, Any] = Body(default={})) -> Dict[str, Any]:
+    from .mappings import validate_mapping
+    return validate_mapping(table_id, payload)

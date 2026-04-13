@@ -38,6 +38,7 @@ def bulk_import_devices(payload: Dict[str, Any]) -> Dict[str, Any]:
             protocol = (row.get("protocol") or "modbus").strip().lower()
             unit = row.get("unit")
             connections = (row.get("connections") or "").strip()
+            mqtt_gateway = (row.get("mqtt_gateway") or "").strip()
 
             # Validate required fields
             if not name:
@@ -155,16 +156,19 @@ def bulk_import_devices(payload: Dict[str, Any]) -> Dict[str, Any]:
             if port:
                 device_payload["port"] = int(port)
 
-            # Add unitId for Modbus
-            if protocol == "modbus" :
-                if unit:
-                    device_payload["unitId"] = int(unit)
-                else:
-                    device_payload["unitId"] = 1
+            # Add unitId for Modbus and MQTT (meter id)
+            if protocol in ("modbus", "mqtt"):
+                device_payload["unitId"] = int(unit) if unit else 1
 
             # Add MAC address to params if provided
             if mac:
                 device_payload["params"]["mac"] = mac
+
+            # Store broker IP in params for job runner host resolution
+            device_payload["params"]["host"] = ip
+            # Store MQTT logical gateway label (e.g. "GW-01") for filtering MQTT payloads
+            if mqtt_gateway:
+                device_payload["params"]["mqtt_gateway"] = mqtt_gateway
 
             # Connection test before creating (mirrors POST /devices)
             extra = {}

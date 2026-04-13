@@ -367,7 +367,7 @@ def init() -> None:
             )
         )
         # Pre-populate with existing protocols
-        for proto in ["modbus", "opcua"]:
+        for proto in ["modbus", "opcua", "mqtt"]:
             try:
                 c.execute(
                     text(_upsert_sql("app_protocol_types", ["type"], ["type"])),
@@ -436,6 +436,46 @@ def save_schema(schema: Dict[str, Any]) -> None:
                     "desc_text": fld.get("desc"),
                 },
             )
+
+
+def add_schema_field(schema_id: str, field: Dict[str, Any]) -> None:
+    """Add a single field to an existing schema (upsert by schema_id + key)."""
+    with _conn() as c:
+        c.execute(
+            text(
+                _upsert_sql(
+                    "app_schema_fields",
+                    ["schema_id", "key", "type", "unit", "scale", "desc_text"],
+                    ["schema_id", "key"],
+                )
+            ),
+            {
+                "schema_id": schema_id,
+                "key": field.get("key"),
+                "type": field.get("type"),
+                "unit": field.get("unit"),
+                "scale": field.get("scale"),
+                "desc_text": field.get("desc"),
+            },
+        )
+
+
+def delete_schema(schema_id: str) -> bool:
+    """Delete a schema and all its fields. Returns True if the schema was deleted."""
+    with _conn() as c:
+        c.execute(text("DELETE FROM app_schema_fields WHERE schema_id=:sid"), {"sid": schema_id})
+        result = c.execute(text("DELETE FROM app_schemas WHERE id=:sid"), {"sid": schema_id})
+        return result.rowcount > 0
+
+
+def delete_schema_field(schema_id: str, field_key: str) -> bool:
+    """Delete a single field from a schema. Returns True if a row was deleted."""
+    with _conn() as c:
+        result = c.execute(
+            text("DELETE FROM app_schema_fields WHERE schema_id=:sid AND key=:key"),
+            {"sid": schema_id, "key": field_key},
+        )
+        return result.rowcount > 0
 
 
 def import_schemas(items: List[Dict[str, Any]]) -> int:
@@ -557,6 +597,22 @@ def set_table_db_target(table_id: str, db_target_id: Optional[str]) -> None:
             text("UPDATE app_device_tables SET db_target_id=:db_target_id WHERE id=:id"),
             {"db_target_id": db_target_id, "id": table_id},
         )
+
+
+def update_table(table_id: str, patch: Dict[str, Any]) -> None:
+    """Update app_device_tables columns from a camelCase patch dict."""
+    col_map = {"name": "name", "schemaId": "schema_id", "dbTargetId": "db_target_id"}
+    sets = []
+    params: Dict[str, Any] = {"id": table_id}
+    for key, col in col_map.items():
+        if key in patch:
+            sets.append(f"{col}=:{col}")
+            params[col] = patch[key]
+    if not sets:
+        return
+    sql = f"UPDATE app_device_tables SET {', '.join(sets)} WHERE id=:id"
+    with _conn() as c:
+        c.execute(text(sql), params)
 
 # ---------- Gateways ----------
 def load_gateways() -> List[Dict[str, Any]]:

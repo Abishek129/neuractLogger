@@ -10,7 +10,10 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List, Tuple
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+
+from ..permissions import require_logger_write
+from .notifications import notify_job_started
 from sqlalchemy import create_engine, text
 
 from ..store import Store
@@ -902,7 +905,7 @@ def list_jobs() -> Dict[str, Any]:
     return {"items": Store.instance().list_jobs()}
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_logger_write)])
 def create_job(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         job = Store.instance().create_job(payload)
@@ -921,8 +924,8 @@ def jobs_metrics_summary() -> Dict[str, Any]:
     return {"ok": True, "data": items}
 
 
-@router.post("/{job_id}/start")
-def start_job(job_id: str) -> Dict[str, Any]:
+@router.post("/{job_id}/start", dependencies=[Depends(require_logger_write)])
+def start_job(job_id: str, request: Request, background_tasks: BackgroundTasks) -> Dict[str, Any]:
     job = Store.instance().get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
@@ -934,10 +937,15 @@ def start_job(job_id: str) -> Dict[str, Any]:
     _job_threads[job_id] = thr
     Store.instance().set_job_status(job_id, "running")
     thr.start()
+
+    claims = getattr(request.state, "auth", {})
+    started_by = claims.get("preferred_username", "unknown")
+    background_tasks.add_task(notify_job_started, job_id, started_by)
+
     return {"success": True, "message": "started"}
 
 
-@router.post("/{job_id}/pause")
+@router.post("/{job_id}/pause", dependencies=[Depends(require_logger_write)])
 def pause_job(job_id: str) -> Dict[str, Any]:
     if not Store.instance().get_job(job_id):
         raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
@@ -959,7 +967,7 @@ def pause_job(job_id: str) -> Dict[str, Any]:
     return {"success": True, "message": "paused"}
 
 
-@router.post("/{job_id}/stop")
+@router.post("/{job_id}/stop", dependencies=[Depends(require_logger_write)])
 def stop_job(job_id: str) -> Dict[str, Any]:
     if not Store.instance().get_job(job_id):
         raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
@@ -981,7 +989,7 @@ def stop_job(job_id: str) -> Dict[str, Any]:
     return {"success": True, "message": "stopped"}
 
 
-@router.post("/stop_all")
+@router.post("/stop_all", dependencies=[Depends(require_logger_write)])
 def stop_all_jobs() -> Dict[str, Any]:
     store = Store.instance()
     jobs = store.list_jobs()
@@ -1008,7 +1016,7 @@ def stop_all_jobs() -> Dict[str, Any]:
     return {"success": True, "stopped": stopped}
 
 
-@router.post("/{job_id}/dry_run")
+@router.post("/{job_id}/dry_run", dependencies=[Depends(require_logger_write)])
 def dry_run(job_id: str) -> Dict[str, Any]:
     job = Store.instance().get_job(job_id)
     if not job:
@@ -1187,7 +1195,7 @@ def job_errors(job_id: str, frm: Optional[str] = None, to: Optional[str] = None)
     return {"ok": True, "data": errs}
 
 
-@router.post("/{job_id}/backfill")
+@router.post("/{job_id}/backfill", dependencies=[Depends(require_logger_write)])
 def backfill(job_id: str) -> Dict[str, Any]:
     job = Store.instance().get_job(job_id)
     if not job:

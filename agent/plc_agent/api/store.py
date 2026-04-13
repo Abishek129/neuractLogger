@@ -92,6 +92,39 @@ class Store:
             self._schemas = appdb.load_schemas()
         return len(items)
 
+    def add_schema_field(self, schema_id: str, field: Dict[str, Any]) -> Dict[str, Any]:
+        with self._mtx:
+            schema = next((s for s in self._schemas if s.get("id") == schema_id), None)
+            if not schema:
+                raise ValueError("SCHEMA_NOT_FOUND")
+            appdb.add_schema_field(schema_id, field)
+            self._schemas = appdb.load_schemas()
+            return next(s for s in self._schemas if s.get("id") == schema_id)
+
+    def delete_schema(self, schema_id: str) -> bool:
+        with self._mtx:
+            schema = next((s for s in self._schemas if s.get("id") == schema_id), None)
+            if not schema:
+                raise ValueError("SCHEMA_NOT_FOUND")
+            # Reject if any tables reference this schema
+            tables_using = [t for t in self._tables if t.get("schemaId") == schema_id]
+            if tables_using:
+                raise ValueError("SCHEMA_IN_USE")
+            deleted = appdb.delete_schema(schema_id)
+            if deleted:
+                self._schemas = appdb.load_schemas()
+            return deleted
+
+    def delete_schema_field(self, schema_id: str, field_key: str) -> bool:
+        with self._mtx:
+            schema = next((s for s in self._schemas if s.get("id") == schema_id), None)
+            if not schema:
+                raise ValueError("SCHEMA_NOT_FOUND")
+            deleted = appdb.delete_schema_field(schema_id, field_key)
+            if deleted:
+                self._schemas = appdb.load_schemas()
+            return deleted
+
     def get_schema(self, schema_id: str) -> Optional[Dict[str, Any]]:
         with self._mtx:
             return next((s for s in self._schemas if s.get("id") == schema_id), None)
@@ -220,7 +253,7 @@ class Store:
             return self._default_db_target_id
 
     # -------------- Device Tables --------------
-    def add_tables_bulk(self, parent_schema_id: str, names: List[str], db_target_id: Optional[str]) -> List[Dict[str, Any]]:
+    def add_tables_bulk(self, parent_schema_id: str, names: List[str], db_target_id: Optional[str], *, device_id: Optional[str] = None) -> List[Dict[str, Any]]:
         now = int(time.time() * 1000)
         out: List[Dict[str, Any]] = []
         with self._mtx:
@@ -233,7 +266,7 @@ class Store:
                     "status": "not_migrated",
                     "lastMigratedAt": None,
                     "mappingHealth": None,
-                    "deviceId": None,
+                    "deviceId": device_id,
                 }
                 self._tables.append(tbl)
                 out.append(tbl)
@@ -273,8 +306,20 @@ class Store:
         with self._mtx:
             before = len(self._tables)
             self._tables = [t for t in self._tables if t.get("id") != table_id]
+            self._mappings.pop(table_id, None)
         appdb.delete_table(table_id)
         return len(self._tables) < before
+
+    def update_table(self, table_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        with self._mtx:
+            for t in self._tables:
+                if t.get("id") == table_id:
+                    for key in ("name", "schemaId", "dbTargetId"):
+                        if key in patch:
+                            t[key] = patch[key]
+                    appdb.update_table(table_id, patch)
+                    return t
+        return None
 
     # -------------- Mappings --------------
     def get_mapping(self, table_id: str) -> Dict[str, Any]:
@@ -366,6 +411,9 @@ class Store:
                     ok += 1
             elif p == "modbus":
                 if r.get("address") and r.get("dataType"):
+                    ok += 1
+            elif p == "mqtt":
+                if r.get("address"):
                     ok += 1
             else:
                 # unknown protocol, do not count
@@ -905,6 +953,8 @@ class Store:
                     port = int(params.get("port", 502))
                 elif proto == "opcua":
                     port = int(params.get("port", 4840))
+                elif proto == "mqtt":
+                    port = int(params.get("port", 1883))
                 else:
                     port = int(params.get("port", 502))
 
@@ -962,6 +1012,28 @@ class Store:
                     return False, dt, str(e)
                 dt = int((time.perf_counter() - t0) * 1000)
                 return True, dt, None
+
+            elif proto == "mqtt":
+                if not host:
+                    params = dev.get("params") or {}
+                    host = (params.get("host") or params.get("ip") or "").strip()
+                if not host:
+                    return False, 0, "HOST_REQUIRED"
+                import socket
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(5)
+                try:
+                    sock.connect((host, int(port)))
+                    dt = int((time.perf_counter() - t0) * 1000)
+                    return True, dt, None
+                except OSError as e:
+                    dt = int((time.perf_counter() - t0) * 1000)
+                    return False, dt, f"TCP_CONNECT_FAILED: {e}"
+                finally:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
 
             else:
                 dt = int((time.perf_counter() - t0) * 1000)

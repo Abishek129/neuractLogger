@@ -15,8 +15,12 @@ serde_json = "1.0"
 sysinfo = "0.30"
 tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "time"] }
 tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
-windows = { version = "0.52", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
 tokio-modbus = "0.14"
 byteorder = "1.5"
 futures = "0.3"
 libc = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rumqttc = "0.24"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.52", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -104,6 +104,23 @@ async def get_user_id_by_username(token: str, username: str) -> Optional[str]:
     if not users:
         return None
     return users[0].get("id")
+
+
+async def get_users_by_realm_role(token: str, role_name: str) -> List[Dict[str, Any]]:
+    """Return all users who have the given realm-level role."""
+    client = _get_client()
+    resp = await client.get(
+        f"{KEYCLOAK_ADMIN_BASE_URL}/roles/{role_name}/users",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    if resp.status_code == 404:
+        log.warning("Realm role '%s' not found in Keycloak", role_name)
+        return []
+    if resp.status_code != 200:
+        raise KeycloakAdminError(
+            f"Failed to get users for realm role '{role_name}': {resp.status_code} {resp.text}"
+        )
+    return resp.json()
 
 
 async def get_client_uuid(token: str, client_id: str) -> Optional[str]:

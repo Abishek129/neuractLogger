@@ -26,6 +26,15 @@ def _resolve_table(table_id: str, *, db_target_override: Optional[str] = None) -
     raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
 
 
+_INT_ENCODINGS = {"uint16_enum", "uint16", "int16", "bool16", "uint32", "int32", "uint64", "int64"}
+
+
+def _build_field_type_map(table: Dict[str, Any]) -> Dict[str, str]:
+    """Build {field_key: encoding_type} from the table's schema fields."""
+    schema = Store.instance().get_schema(table.get("schemaId")) or {"fields": []}
+    return {f["key"]: f.get("type", "float32") for f in schema.get("fields", [])}
+
+
 @router.get("/{table_id}")
 def get_mapping(table_id: str) -> Dict[str, Any]:
     t = _resolve_table(table_id)
@@ -50,7 +59,14 @@ def upsert_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     t = _resolve_table(table_id, db_target_override=payload.get("dbTargetId"))
     device_id = payload.get("deviceId")
     rows_patch = payload.get("rows") or {}
-    _save_mapping_to_user_db(t, rows_patch, device_id)
+    field_type_map = _build_field_type_map(t)
+    # Enrich rows with auto-derived encoding/dataType so in-memory store stays consistent
+    for k, v in rows_patch.items():
+        if not v.get("encoding"):
+            v["encoding"] = field_type_map.get(k, "float32")
+        if not v.get("dataType"):
+            v["dataType"] = "int" if v["encoding"] in _INT_ENCODINGS else "float"
+    _save_mapping_to_user_db(t, rows_patch, device_id, field_type_map=field_type_map)
     m = Store.instance().upsert_mapping(table_id, device_id=device_id, rows_patch=rows_patch)
     # Recompute health after save
     schema = Store.instance().get_schema(t.get("schemaId")) or {"fields": []}
@@ -62,9 +78,29 @@ def upsert_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 @router.post("/{table_id}/bulk_apply")
 def bulk_apply(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     t = _resolve_table(table_id, db_target_override=payload.get("dbTargetId"))
+    # Accept both dict format {rows: {field: {...}}} and array format {mappings: [{field_key, ...}]}
     rows = payload.get("rows") or {}
-    _save_mapping_to_user_db(t, rows, payload.get("deviceId"))
-    m = Store.instance().upsert_mapping(table_id, rows_patch=rows)
+    if not rows and isinstance(payload.get("mappings"), list):
+        for entry in payload["mappings"]:
+            fk = entry.get("field_key") or entry.get("fieldKey") or ""
+            if fk:
+                rows[fk] = {
+                    "protocol": entry.get("protocol", "modbus"),
+                    "address": str(entry.get("address", "")),
+                    "dataType": entry.get("data_type") or entry.get("dataType") or "",
+                    "scale": entry.get("scale"),
+                    "deadband": entry.get("deadband"),
+                }
+    field_type_map = _build_field_type_map(t)
+    for k, v in rows.items():
+        if not v.get("encoding"):
+            v["encoding"] = field_type_map.get(k, "float32")
+        if not v.get("dataType"):
+            v["dataType"] = "int" if v["encoding"] in _INT_ENCODINGS else "float"
+    # Preserve existing device binding if no deviceId in payload
+    device_id = payload.get("deviceId") or t.get("deviceId")
+    _save_mapping_to_user_db(t, rows, device_id, field_type_map=field_type_map)
+    m = Store.instance().upsert_mapping(table_id, device_id=device_id, rows_patch=rows)
     return {"success": True, "message": "mapping_applied", "item": m}
 
 
@@ -73,7 +109,8 @@ def import_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     t = _resolve_table(table_id, db_target_override=payload.get("dbTargetId"))
     mapping = payload.get("mapping") or payload
     rows = mapping.get("rows") or {}
-    _replace_mapping_in_user_db(t, rows, mapping.get("deviceId") or payload.get("deviceId"))
+    field_type_map = _build_field_type_map(t)
+    _replace_mapping_in_user_db(t, rows, mapping.get("deviceId") or payload.get("deviceId"), field_type_map=field_type_map)
     m = Store.instance().replace_mapping(table_id, mapping)
     schema = Store.instance().get_schema(t.get("schemaId")) or {"fields": []}
     required = [f.get("key") for f in (schema.get("fields") or [])]
@@ -82,7 +119,8 @@ def import_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @router.post("/{table_id}/validate")
-def validate_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def validate_mapping(table_id: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = payload or {}
     t = _resolve_table(table_id, db_target_override=payload.get("dbTargetId"))
     m = Store.instance().get_mapping(table_id)
     schema = Store.instance().get_schema(t.get("schemaId")) or {"fields": []}
@@ -245,12 +283,7 @@ def _modbus_can_read(device: Dict[str, Any], row: Dict[str, Any]) -> bool:
             address = int(addr_raw)
         except Exception:
             return False
-        # Heuristic: map address to function/register type
-        def read_one(cli, start):
-            r = cli.read_holding_registers(start, 1)
-            if hasattr(r, "isError"):
-                return not r.isError()
-            return not getattr(r, "isError", True)
+        unit_id = int(device.get("unitId") or device.get("unit_id") or 1)
         start = 0
         fn_ok = False
         client = ModbusTcpClient(host=host, port=port)
@@ -259,18 +292,14 @@ def _modbus_can_read(device: Dict[str, Any], row: Dict[str, Any]) -> bool:
                 return False
             if address >= 40001:
                 start = address - 40001
-                fn_ok = read_one(client, start)
             elif address >= 30001:
                 start = address - 30001
-                r = client.read_input_registers(start, 1)
-                fn_ok = (not r.isError()) if hasattr(r, "isError") else True
             elif address >= 10001:
                 start = address - 10001
-                r = client.read_coils(start, 1)
-                fn_ok = (not r.isError()) if hasattr(r, "isError") else True
             else:
                 start = max(0, address)
-                fn_ok = read_one(client, start)
+            r = client.read_holding_registers(address=start, count=1, device_id=unit_id)
+            fn_ok = (not r.isError()) if hasattr(r, "isError") else True
         finally:
             try:
                 client.close()
@@ -310,7 +339,8 @@ def copy_mapping(src_table_id: str, dst_table_id: str) -> Dict[str, Any]:
         src_target = src_t.get("dbTargetId") or Store.instance().get_default_db_target()
         dst_target = dst_t.get("dbTargetId") or Store.instance().get_default_db_target()
         if src_target == dst_target:
-            _replace_mapping_in_user_db(dst_t, m.get("rows") or {})
+            field_type_map = _build_field_type_map(dst_t)
+            _replace_mapping_in_user_db(dst_t, m.get("rows") or {}, field_type_map=field_type_map)
     return {"success": True, "message": "mapping_copied", "item": m}
 
 
@@ -397,6 +427,7 @@ def _ensure_mapping_table(engine, table_name: Optional[str] = None) -> None:
         "scale REAL,"
         "deadband REAL,"
         "device_id TEXT,"
+        "encoding TEXT,"
         "PRIMARY KEY (table_name, field_key)"
         ")"
     )
@@ -469,40 +500,45 @@ def _select_mapping_table(engine, *, create: bool = False) -> str:
     return ident["qualified"]
 
 
-def _save_mapping_to_user_db(table: Dict[str, Any], rows: Dict[str, Dict[str, Any]], device_id: Optional[str] = None) -> None:
+def _save_mapping_to_user_db(table: Dict[str, Any], rows: Dict[str, Dict[str, Any]], device_id: Optional[str] = None, *, field_type_map: Optional[Dict[str, str]] = None) -> None:
     engine = _engine_for_target_id(table.get("dbTargetId"))
     # Choose existing mapping table when present; create standard if none
     m_table = _select_mapping_table(engine, create=True)
     t_ident = _device_ident(engine, table.get("name"))
+    ftm = field_type_map or {}
     with engine.begin() as conn:
         for k, v in (rows or {}).items():
             try:
+                enc = v.get("encoding") or ftm.get(k, "float32")
+                dt = v.get("dataType") or ("int" if enc in _INT_ENCODINGS else "float")
                 params = {
                     "t": t_ident["name"],
                     "k": k,
                     "p": v.get("protocol"),
                     "a": v.get("address") or v.get("nodeId"),
-                    "dt": v.get("dataType"),
+                    "dt": dt,
                     "s": v.get("scale"),
                     "d": v.get("deadband"),
                     "dev": device_id,
+                    "enc": enc,
                 }
                 if _dialect_name(engine).startswith("postgres"):
                     conn.execute(
                         text(
-                            f"INSERT INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id) "
-                            "VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev) "
+                            f"INSERT INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id,encoding) "
+                            "VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev,:enc) "
                             "ON CONFLICT (table_name, field_key) DO UPDATE SET "
                             "protocol=EXCLUDED.protocol, address=EXCLUDED.address, data_type=EXCLUDED.data_type, "
-                            "scale=EXCLUDED.scale, deadband=EXCLUDED.deadband, device_id=EXCLUDED.device_id"
+                            "scale=EXCLUDED.scale, deadband=EXCLUDED.deadband, device_id=EXCLUDED.device_id, "
+                            "encoding=EXCLUDED.encoding"
                         ),
                         params,
                     )
                 else:
                     conn.execute(
                         text(
-                            f"INSERT OR REPLACE INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id)"
-                            " VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev)"
+                            f"INSERT OR REPLACE INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id,encoding)"
+                            " VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev,:enc)"
                         ),
                         params,
                     )
@@ -512,45 +548,40 @@ def _save_mapping_to_user_db(table: Dict[str, Any], rows: Dict[str, Dict[str, An
                     conn.execute(text(f"DELETE FROM {m_table} WHERE table_name=:t AND field_key=:k"), {"t": t_ident["name"], "k": k})
                     conn.execute(
                         text(
-                            f"INSERT INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id)"
-                            " VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev)"
+                            f"INSERT INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id,encoding)"
+                            " VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev,:enc)"
                         ),
-                        {
-                            "t": t_ident["name"],
-                            "k": k,
-                            "p": v.get("protocol"),
-                            "a": v.get("address") or v.get("nodeId"),
-                            "dt": v.get("dataType"),
-                            "s": v.get("scale"),
-                            "d": v.get("deadband"),
-                            "dev": device_id,
-                        },
+                        params,
                     )
                 except Exception:
                     pass
 
 
-def _replace_mapping_in_user_db(table: Dict[str, Any], rows: Dict[str, Dict[str, Any]], device_id: Optional[str] = None) -> None:
+def _replace_mapping_in_user_db(table: Dict[str, Any], rows: Dict[str, Dict[str, Any]], device_id: Optional[str] = None, *, field_type_map: Optional[Dict[str, str]] = None) -> None:
     engine = _engine_for_target_id(table.get("dbTargetId"))
     m_table = _select_mapping_table(engine, create=True)
     t_ident = _device_ident(engine, table.get("name"))
+    ftm = field_type_map or {}
     with engine.begin() as conn:
         conn.execute(text(f"DELETE FROM {m_table} WHERE table_name=:t"), {"t": t_ident["name"]})
         for k, v in (rows or {}).items():
+            enc = v.get("encoding") or ftm.get(k, "float32")
+            dt = v.get("dataType") or ("int" if enc in _INT_ENCODINGS else "float")
             conn.execute(
                 text(
-                    f"INSERT INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id)"
-                    " VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev)"
+                    f"INSERT INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id,encoding)"
+                    " VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev,:enc)"
                 ),
                 {
                     "t": t_ident["name"],
                     "k": k,
                     "p": v.get("protocol"),
                     "a": v.get("address") or v.get("nodeId"),
-                    "dt": v.get("dataType"),
+                    "dt": dt,
                     "s": v.get("scale"),
                     "d": v.get("deadband"),
                     "dev": device_id,
+                    "enc": enc,
                 },
             )
 

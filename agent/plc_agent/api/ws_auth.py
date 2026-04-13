@@ -34,17 +34,17 @@ async def authenticate_websocket(ws: WebSocket) -> Optional[Dict[str, Any]]:
             token = token_list[0]
 
     if not token:
-        log.debug("WebSocket auth: no token provided")
+        log.warning("WebSocket auth: no token provided")
         return None
 
     try:
         claims = decode_jwt(token)
     except Exception as e:
-        log.debug("WebSocket auth: JWT validation failed: %s", e)
+        log.warning("WebSocket auth: JWT validation failed: %s", e)
         return None
 
     if not has_logger_read_role(claims):
-        log.debug("WebSocket auth: missing logger-read role")
+        log.warning("WebSocket auth: missing logger-read role")
         return None
 
     return claims

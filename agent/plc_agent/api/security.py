@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 import jwt
 from jwt import PyJWKClient
 
-from .keycloak_config import KEYCLOAK_JWKS_URL, KEYCLOAK_ALLOWED_ISSUERS
+from .keycloak_config import KEYCLOAK_JWKS_URL, KEYCLOAK_REALM
 
 log = logging.getLogger(__name__)
 
@@ -25,8 +25,12 @@ def _get_jwks_client() -> PyJWKClient:
 
 
 def decode_jwt(token: str) -> Dict[str, Any]:
-    """Validate and decode a Keycloak JWT token. Returns claims dict."""
-    log.info("decode_jwt: JWKS_URL=%s, ALLOWED_ISSUERS=%s", KEYCLOAK_JWKS_URL, KEYCLOAK_ALLOWED_ISSUERS)
+    """Validate and decode a Keycloak JWT token. Returns claims dict.
+
+    JWKS signature verification proves the token was issued by our Keycloak.
+    Issuer is validated by realm suffix only (not full URL) so any access
+    hostname (localhost, LAN, Tailscale) works without a whitelist.
+    """
     try:
         client = _get_jwks_client()
         signing_key = client.get_signing_key_from_jwt(token)
@@ -34,9 +38,12 @@ def decode_jwt(token: str) -> Dict[str, Any]:
             token,
             signing_key.key,
             algorithms=["RS256"],
-            issuer=KEYCLOAK_ALLOWED_ISSUERS,
-            options={"verify_aud": False},
+            options={"verify_aud": False, "verify_iss": False},
         )
+        # Validate issuer ends with our realm — works for any hostname/IP
+        issuer = claims.get("iss", "")
+        if not issuer.endswith(f"/realms/{KEYCLOAK_REALM}"):
+            raise jwt.InvalidIssuerError(f"Unexpected realm in issuer: {issuer}")
         return claims
     except Exception as e:
         log.error("decode_jwt FAILED: %s: %s", type(e).__name__, e)

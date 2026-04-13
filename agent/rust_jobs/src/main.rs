@@ -20,12 +20,15 @@ use opcua::types::Variant;
 use tokio_modbus::prelude::{Reader, Slave, SlaveContext};
 use tokio_postgres::{Client as PgClient, NoTls};
 use tokio_postgres::types::{ToSql, Type};
+#[cfg(target_os = "windows")]
 use windows::Win32::Foundation::{HLOCAL, LocalFree};
+#[cfg(target_os = "windows")]
 use windows::Win32::Security::Cryptography::{
     CryptUnprotectData, CRYPTPROTECT_LOCAL_MACHINE, CRYPT_INTEGER_BLOB,
 };
 use futures::future::join_all;
 use sysinfo::{Pid, System};
+use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 
 const DEFAULT_OPCUA_ENDPOINT: &str = "opc.tcp://127.0.0.1:4840/freeopcua/server/";
 const ERROR_LOG_FILENAME: &str = "error_log_rust.csv";
@@ -195,6 +198,15 @@ struct Trigger {
 }
 
 #[derive(Clone, Debug)]
+struct TriggerFireInfo {
+    field_key: String,
+    op: String,
+    current_value: Option<f64>,
+    previous_value: Option<f64>,
+    threshold: Option<f64>,
+}
+
+#[derive(Clone, Debug)]
 struct TableDef {
     id: String,
     name: String,
@@ -225,6 +237,7 @@ struct MappingRow {
     protocol: String,
     address: String,
     data_type: String,
+    encoding: String,
     scale: Option<f64>,
     deadband: Option<f64>,
     device_id: Option<String>,
@@ -536,6 +549,17 @@ async fn main() -> Result<()> {
 
     let device_manager = Arc::new(DeviceManager::new());
 
+    let api_base_url = env::var("API_BASE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:5175".to_string());
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("Failed to build HTTP client")?;
+    let notify_cooldown_sec: u64 = env::var("TRIGGER_NOTIFY_COOLDOWN_SEC")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+
     let meta_client = Arc::new(meta_client);
     let mut running: HashMap<String, JobHandle> = HashMap::new();
 
@@ -554,6 +578,9 @@ async fn main() -> Result<()> {
             let job_clone = job.clone();
             let job_id = job.id.clone();
             let stop_thread = stop.clone();
+            let hc = http_client.clone();
+            let abu = api_base_url.clone();
+            let ncs = notify_cooldown_sec;
             let join = std::thread::spawn(move || {
                 let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
                     Ok(rt) => rt,
@@ -562,7 +589,7 @@ async fn main() -> Result<()> {
                         return;
                     }
                 };
-                if let Err(e) = rt.block_on(run_job(job_clone, meta, dm, bc, stop_thread)) {
+                if let Err(e) = rt.block_on(run_job(job_clone, meta, dm, bc, stop_thread, hc, abu, ncs)) {
                     error!("job {} failed: {}", job_id, e);
                 }
             });
@@ -595,6 +622,9 @@ async fn run_job(
     device_manager: Arc<DeviceManager>,
     bench_client: Arc<PgClient>,
     stop: Arc<AtomicBool>,
+    http_client: reqwest::Client,
+    api_base_url: String,
+    notify_cooldown_sec: u64,
 ) -> Result<()> {
     let interval = Duration::from_millis(job.interval_ms.max(100));
     let report_every = Duration::from_secs_f64(
@@ -607,6 +637,7 @@ async fn run_job(
     let default_target = load_default_target(meta_client.as_ref()).await?;
     let target_manager = TargetManager::new();
     let modbus_manager = ModbusManager::new();
+    let mqtt_manager = Arc::new(MqttManager::new());
     let mut tables = Vec::new();
     for tid in &job.tables {
         if let Some(t) = load_table(meta_client.as_ref(), tid).await? {
@@ -628,6 +659,8 @@ async fn run_job(
         }
     }
     let mut last_values: HashMap<String, FieldMap> = HashMap::new();
+    let mut last_notification: HashMap<String, Instant> = HashMap::new();
+    let notify_cooldown = Duration::from_secs(notify_cooldown_sec);
     let mut last_report = Instant::now();
     let mut win_reads_ok: u64 = 0;
     let mut win_reads_err: u64 = 0;
@@ -698,7 +731,7 @@ async fn run_job(
                 );
 
                 let group_futures: Vec<_> = endpoint_groups.into_values().map(|tables| {
-                    read_endpoint_group(tables, &device_manager, &modbus_manager, &job.id)
+                    read_endpoint_group(tables, &device_manager, &modbus_manager, &mqtt_manager, &job.id)
                 }).collect();
                 let all_results = join_all(group_futures).await;
 
@@ -801,7 +834,7 @@ async fn run_job(
                         None => continue,
                     };
                     let t_read = Instant::now();
-                    let values = match read_table_values_cached(table_rt, &device_manager, &modbus_manager, &job.id).await {
+                    let values = match read_table_values_cached(table_rt, &device_manager, &modbus_manager, &mqtt_manager, &job.id).await {
                         Ok((v, rt)) => {
                             let read_ms = t_read.elapsed().as_secs_f64() * 1000.0;
                             win_reads_ok += 1;
@@ -819,9 +852,28 @@ async fn run_job(
                             continue;
                         }
                     };
-                    let should_fire = eval_triggers(&triggers, table_id.as_str(), &values, &mut last_values);
+                    let fire_info = eval_triggers(&triggers, table_id.as_str(), &values, &mut last_values);
+                    let should_fire = fire_info.is_some();
                     info!("Job {} [TRIG_EVAL] table={} fired={}", job.id, table_id, should_fire);
                     if should_fire {
+                        // Fire-and-forget trigger notification
+                        if let Some(ref info) = fire_info {
+                            let tname = table_rt.table.name.clone();
+                            let key = format!("{}:{}", table_id, info.field_key);
+                            let should_notify = last_notification.get(&key)
+                                .map(|t| t.elapsed() >= notify_cooldown)
+                                .unwrap_or(true);
+                            if should_notify {
+                                last_notification.insert(key, Instant::now());
+                                let client = http_client.clone();
+                                let url = api_base_url.clone();
+                                let jname = job.name.clone();
+                                let info_c = info.clone();
+                                tokio::spawn(async move {
+                                    send_trigger_notification(&client, &url, &jname, &tname, &info_c).await;
+                                });
+                            }
+                        }
                         let t_write = Instant::now();
                         match write_values_cached(table_rt, &values, &job.id).await {
                             Ok(wt) => {
@@ -997,10 +1049,12 @@ fn build_modbus_buckets(mapping: &[MappingRow]) -> Vec<RegisterBucket> {
             Ok(a) => a,
             Err(_) => continue,
         };
-        let encoding = if row.data_type.is_empty() {
-            "float32".to_string()
-        } else {
+        let encoding = if !row.encoding.is_empty() {
+            row.encoding.to_lowercase()
+        } else if !row.data_type.is_empty() {
             row.data_type.to_lowercase()
+        } else {
+            "float32".to_string()
         };
         let (reg_count, _) = modbus_encoding_info(&encoding);
 
@@ -1102,6 +1156,7 @@ async fn read_table_values_cached(
     table_rt: &TableRuntime,
     device_manager: &Arc<DeviceManager>,
     modbus_manager: &ModbusManager,
+    mqtt_manager: &Arc<MqttManager>,
     job_id: &str,
 ) -> Result<(FieldMap, ReadTimings)> {
     match table_rt.device.protocol.to_lowercase().as_str() {
@@ -1124,6 +1179,15 @@ async fn read_table_values_cached(
             )
             .await
         }
+        "mqtt" => {
+            read_mqtt_values(
+                mqtt_manager,
+                &table_rt.device,
+                &table_rt.mapping,
+                job_id,
+            )
+            .await
+        }
         other => Err(anyhow!("device protocol not supported: {}", other)),
     }
 }
@@ -1138,6 +1202,15 @@ fn table_endpoint_key(table_rt: &TableRuntime) -> String {
             let port = resolve_modbus_port(&table_rt.device);
             format!("modbus:{}:{}", host, port)
         }
+        // MQTT: group all devices on the same broker together (one background task per broker)
+        "mqtt" => {
+            let host = table_rt.device.params.get("host")
+                .or_else(|| table_rt.device.params.get("ip"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(&table_rt.device.id);
+            let port = resolve_mqtt_port(&table_rt.device);
+            format!("mqtt:{}:{}", host, port)
+        }
         // OPC UA and others: group by device ID (each device has its own session)
         _ => table_rt.device.id.clone(),
     }
@@ -1149,12 +1222,13 @@ async fn read_endpoint_group<'a>(
     tables: Vec<&'a TableRuntime>,
     device_manager: &Arc<DeviceManager>,
     modbus_manager: &ModbusManager,
+    mqtt_manager: &Arc<MqttManager>,
     job_id: &str,
 ) -> Vec<(&'a TableRuntime, Result<(FieldMap, ReadTimings)>, f64)> {
     let mut results = Vec::with_capacity(tables.len());
     for table_rt in tables {
         let t_read = Instant::now();
-        let result = read_table_values_cached(table_rt, device_manager, modbus_manager, job_id).await;
+        let result = read_table_values_cached(table_rt, device_manager, modbus_manager, mqtt_manager, job_id).await;
         let read_ms = t_read.elapsed().as_secs_f64() * 1000.0;
         results.push((table_rt, result, read_ms));
     }
@@ -1635,6 +1709,10 @@ async fn read_table_values(
             let buckets = build_modbus_buckets(&mapping);
             read_modbus_values(&mgr, &device, gateway.as_ref(), &buckets, "unknown").await.map(|(v, _)| v)
         }
+        "mqtt" => {
+            let mgr = Arc::new(MqttManager::new());
+            read_mqtt_values(&mgr, &device, &mapping, "unknown").await.map(|(v, _)| v)
+        }
         other => Err(anyhow!("device protocol not supported: {}", other)),
     }
 }
@@ -1718,21 +1796,63 @@ fn parse_param_value_for_type(raw: &str, data_type: Option<&str>) -> Box<dyn ToS
     parse_param_value(raw)
 }
 
+async fn send_trigger_notification(
+    client: &reqwest::Client,
+    api_base_url: &str,
+    job_name: &str,
+    table_name: &str,
+    info: &TriggerFireInfo,
+) {
+    let message = format!(
+        "Trigger fired: job='{}' table='{}' field='{}' op='{}' value={} prev={}",
+        job_name,
+        table_name,
+        info.field_key,
+        info.op,
+        info.current_value
+            .map(|v| format!("{:.4}", v))
+            .unwrap_or_else(|| "N/A".into()),
+        info.previous_value
+            .map(|v| format!("{:.4}", v))
+            .unwrap_or_else(|| "N/A".into()),
+    );
+    let url = format!("{}/auth/notifications", api_base_url);
+    let payload = serde_json::json!({
+        "type": "trigger",
+        "message": message,
+    });
+    match client.post(&url).json(&payload).send().await {
+        Ok(r) if !r.status().is_success() => {
+            warn!("Trigger notify HTTP {}", r.status());
+        }
+        Err(e) => {
+            warn!("Trigger notify failed: {}", e);
+        }
+        _ => {}
+    }
+}
+
 fn eval_triggers(
     triggers: &[Trigger],
     table_id: &str,
     values: &FieldMap,
     last_values: &mut HashMap<String, FieldMap>,
-) -> bool {
+) -> Option<TriggerFireInfo> {
     let last = last_values.entry(table_id.to_string()).or_insert_with(HashMap::new);
     for tr in triggers {
         let cur = values.get(&tr.field_key).and_then(|v| v.as_f64());
         let prev = last.get(&tr.field_key).and_then(|v| v.as_f64());
         if eval_op(cur, prev, &tr.op, tr.value, tr.deadband) {
-            return true;
+            return Some(TriggerFireInfo {
+                field_key: tr.field_key.clone(),
+                op: tr.op.clone(),
+                current_value: cur,
+                previous_value: prev,
+                threshold: tr.value,
+            });
         }
     }
-    false
+    None
 }
 
 fn update_last_values(table_id: &str, values: &FieldMap, last_values: &mut HashMap<String, FieldMap>) {
@@ -1951,20 +2071,43 @@ async fn load_gateway(client: &PgClient, gateway_id: &str) -> Result<Option<Gate
 }
 
 async fn load_mapping_rows(target_client: &PgClient, table_name: &str) -> Result<Vec<MappingRow>> {
-    let rows = target_client
+    // Try with encoding column first; fall back without it for older schemas
+    let rows_result = target_client
         .query(
-            "SELECT table_name,field_key,protocol,address,data_type,scale,deadband,device_id \
+            "SELECT table_name,field_key,protocol,address,data_type,scale,deadband,device_id,encoding \
              FROM neuract.device_mappings WHERE table_name=$1",
             &[&table_name],
         )
-        .await?;
+        .await;
+    let (rows, has_encoding) = match rows_result {
+        Ok(r) => (r, true),
+        Err(_) => {
+            let r = target_client
+                .query(
+                    "SELECT table_name,field_key,protocol,address,data_type,scale,deadband,device_id \
+                     FROM neuract.device_mappings WHERE table_name=$1",
+                    &[&table_name],
+                )
+                .await?;
+            (r, false)
+        }
+    };
     let mut out = Vec::new();
     for r in rows {
+        let enc: String = if has_encoding {
+            r.try_get::<_, Option<String>>("encoding")
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         out.push(MappingRow {
             field_key: r.get("field_key"),
             protocol: r.get("protocol"),
             address: r.get("address"),
             data_type: r.get("data_type"),
+            encoding: enc,
             scale: read_optional_f64(&r, "scale"),
             deadband: read_optional_f64(&r, "deadband"),
             device_id: r.get("device_id"),
@@ -2005,6 +2148,8 @@ fn modbus_encoding_info(enc: &str) -> (u16, &'static str) {
         "float64" => (4, "f64"),
         "uint64" => (4, "u64"),
         "int64" => (4, "i64"),
+        // Logical-type fallbacks (when encoding column is absent, data_type is used)
+        "int" | "bool" | "string" => (1, "u16"),
         _ => (1, "u16"), // fallback: single register as u16
     }
 }
@@ -2065,6 +2210,231 @@ impl ModbusManager {
         let max_idle = self.max_idle;
         map.retain(|_, (_, last_used)| last_used.elapsed() < max_idle);
     }
+}
+
+// --- MQTT connection manager ---
+
+struct BrokerState {
+    cache: Arc<Mutex<HashMap<String, serde_json::Value>>>, // gw_label → latest payload
+    _client: AsyncClient,                                  // kept alive so channel stays open
+    _task: tokio::task::JoinHandle<()>,
+}
+
+struct MqttManager {
+    brokers: Mutex<HashMap<String, BrokerState>>,
+}
+
+impl MqttManager {
+    fn new() -> Self {
+        Self { brokers: Mutex::new(HashMap::new()) }
+    }
+
+    async fn ensure_connected(
+        &self,
+        broker_key: &str,
+        host: &str,
+        port: u16,
+        username: &str,
+        password: &str,
+        topic: &str,
+    ) -> Result<Arc<Mutex<HashMap<String, serde_json::Value>>>> {
+        // Return existing connection if the background task is still alive
+        {
+            let brokers = self.brokers.lock().unwrap();
+            if let Some(state) = brokers.get(broker_key) {
+                if !state._task.is_finished() {
+                    return Ok(state.cache.clone());
+                }
+            }
+        }
+
+        let client_id = format!("neuract-{}", broker_key.replace(':', "-"));
+        let mut options = MqttOptions::new(client_id, host, port);
+        options.set_keep_alive(Duration::from_secs(30));
+        if !username.is_empty() {
+            options.set_credentials(username, password);
+        }
+
+        let (client, event_loop) = AsyncClient::new(options, 128);
+        client
+            .subscribe(topic, QoS::AtMostOnce)
+            .await
+            .map_err(|e| anyhow!("MQTT subscribe failed for {}: {}", broker_key, e))?;
+
+        let cache: Arc<Mutex<HashMap<String, serde_json::Value>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let cache_clone = cache.clone();
+        let key_log = broker_key.to_string();
+        let task = tokio::spawn(mqtt_broker_task(event_loop, cache_clone, key_log));
+
+        info!("MQTT connected to broker {} topic={}", broker_key, topic);
+        let state = BrokerState { cache: cache.clone(), _client: client, _task: task };
+        self.brokers.lock().unwrap().insert(broker_key.to_string(), state);
+        Ok(cache)
+    }
+}
+
+/// Background task: drives the MQTT event loop and updates the gw-label cache on every publish.
+async fn mqtt_broker_task(
+    mut event_loop: rumqttc::EventLoop,
+    cache: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    broker_key: String,
+) {
+    loop {
+        match event_loop.poll().await {
+            Ok(Event::Incoming(Packet::Publish(p))) => {
+                match serde_json::from_slice::<serde_json::Value>(&p.payload) {
+                    Ok(payload) => {
+                        if let Some(gw) = payload.get("gw").and_then(|v| v.as_str()) {
+                            cache.lock().unwrap().insert(gw.to_string(), payload);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("MQTT [{}] JSON parse error: {}", broker_key, e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("MQTT [{}] event loop error: {} — will retry on next poll", broker_key, e);
+                tokio::time::sleep(Duration::from_secs(3)).await;
+            }
+            _ => {} // Ack packets, connack, suback — ignore
+        }
+    }
+}
+
+// --- MQTT host / port resolution ---
+
+fn resolve_mqtt_host(device: &Device) -> Result<String> {
+    let host = device
+        .params
+        .get("host")
+        .or_else(|| device.params.get("ip"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    host.ok_or_else(|| anyhow!("MQTT_HOST_MISSING for device {}", device.id))
+}
+
+fn resolve_mqtt_port(device: &Device) -> u16 {
+    if let Some(p) = device.port {
+        return p as u16;
+    }
+    device
+        .params
+        .get("port")
+        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(1883) as u16
+}
+
+// --- MQTT read implementation ---
+
+async fn read_mqtt_values(
+    mqtt_manager: &Arc<MqttManager>,
+    device: &Device,
+    mapping: &[MappingRow],
+    job_id: &str,
+) -> Result<(FieldMap, ReadTimings)> {
+    let t0 = Instant::now();
+
+    let host = resolve_mqtt_host(device)?;
+    let port = resolve_mqtt_port(device);
+    let username = device
+        .params
+        .get("username")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let password = device
+        .params
+        .get("password")
+        .or_else(|| device.params.get("pass"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mqtt_gw = device
+        .params
+        .get("mqtt_gateway")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let topic = device
+        .params
+        .get("topic")
+        .and_then(|v| v.as_str())
+        .unwrap_or("factory/#")
+        .to_string();
+    let meter_id = device.unit_id.unwrap_or(1) as i64;
+    let broker_key = format!("{}:{}", host, port);
+
+    let cache = mqtt_manager
+        .ensure_connected(&broker_key, &host, port, &username, &password, &topic)
+        .await?;
+    let connect_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+    let t_fields = Instant::now();
+
+    // Snapshot the latest payload for this gw label (lock held briefly)
+    let payload = {
+        let map = cache.lock().unwrap();
+        map.get(&mqtt_gw).cloned()
+    };
+    let payload = payload.ok_or_else(|| {
+        anyhow!(
+            "MQTT_NO_DATA: no message received yet for gw='{}' on {}",
+            mqtt_gw,
+            broker_key
+        )
+    })?;
+
+    let meters = payload
+        .get("meters")
+        .and_then(|m| m.as_array())
+        .ok_or_else(|| anyhow!("MQTT_NO_METERS: payload missing 'meters' array for gw='{}'", mqtt_gw))?;
+
+    let meter = meters
+        .iter()
+        .find(|m| m.get("id").and_then(|v| v.as_i64()) == Some(meter_id))
+        .ok_or_else(|| {
+            anyhow!(
+                "MQTT_METER_NOT_FOUND: meter id={} not found in gw='{}' payload",
+                meter_id,
+                mqtt_gw
+            )
+        })?;
+
+    let mut values: FieldMap = HashMap::new();
+    for row in mapping {
+        if row.protocol.to_lowercase() != "mqtt" {
+            continue;
+        }
+        // address = JSON field name in the meter object (e.g. "V1", "kW", "PF")
+        let fv_opt: Option<FieldValue> = match meter.get(&row.address) {
+            Some(serde_json::Value::Number(n)) => n.as_f64().map(FieldValue::Float),
+            Some(serde_json::Value::Bool(b)) => Some(FieldValue::Bool(*b)),
+            Some(serde_json::Value::String(s)) => Some(FieldValue::Text(s.clone())),
+            _ => None,
+        };
+        if let Some(fv) = fv_opt {
+            let fv = if let (Some(scale), Some(f)) = (row.scale, fv.as_f64()) {
+                FieldValue::Float(f * scale)
+            } else {
+                fv
+            };
+            values.insert(row.field_key.clone(), fv);
+        }
+    }
+
+    let fields_ms = t_fields.elapsed().as_secs_f64() * 1000.0;
+    info!(
+        "Job {} [READ_MAPPING] [TOTAL] proto=mqtt gw={} meter_id={} fields={} elapsed_ms={:.2}",
+        job_id,
+        mqtt_gw,
+        meter_id,
+        values.len(),
+        t0.elapsed().as_secs_f64() * 1000.0
+    );
+    Ok((values, ReadTimings { connect_ms, fields_ms }))
 }
 
 // --- Modbus host / port / unit resolution ---
@@ -2362,10 +2732,8 @@ fn params_load(raw: &str) -> serde_json::Value {
     serde_json::from_str(raw).unwrap_or_else(|_| serde_json::json!({}))
 }
 
+#[cfg(target_os = "windows")]
 fn dpapi_unprotect(data: &[u8]) -> Option<Vec<u8>> {
-    if !cfg!(target_os = "windows") {
-        return None;
-    }
     unsafe {
         let mut in_blob = CRYPT_INTEGER_BLOB {
             cbData: data.len() as u32,
@@ -2388,6 +2756,11 @@ fn dpapi_unprotect(data: &[u8]) -> Option<Vec<u8>> {
         let _ = LocalFree(HLOCAL(out_blob.pbData as _));
         Some(out)
     }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn dpapi_unprotect(_data: &[u8]) -> Option<Vec<u8>> {
+    None
 }
 
 fn env_truthy(name: &str) -> bool {

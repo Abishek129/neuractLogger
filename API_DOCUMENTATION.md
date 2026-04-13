@@ -1,44 +1,45 @@
-# LoggerFast API Reference Guide
+# LoggerFast API Reference
 
-## Base Configuration
-
-**Base URL:** `http://127.0.0.1:5175` (configurable via environment)
-**API Version:** Neuract Logger Agent (see `/version` endpoint)
-**Authentication:** Keycloak JWT tokens (except public endpoints)
+**Base URL:** `http://127.0.0.1:5175`
+**Content-Type:** `application/json` (except CSV endpoints)
+**Authentication:** Keycloak JWT Bearer tokens
 
 ---
 
 ## Table of Contents
 
-1. [Health & Status Endpoints](#1-health--status-endpoints)
-2. [Authentication Endpoints](#2-authentication-endpoints)
-3. [Schema Management](#3-schema-management)
-4. [Table Management](#4-table-management)
-5. [Device Management](#5-device-management)
-6. [Protocol Types Management](#6-protocol-types-management)
+1. [Health & System](#1-health--system)
+2. [Authentication](#2-authentication)
+3. [Schemas](#3-schemas)
+4. [Tables](#4-tables)
+5. [Devices](#5-devices)
+6. [Protocol Types](#6-protocol-types)
 7. [Bulk Import](#7-bulk-import)
-8. [Gateway Management](#8-gateway-management)
+8. [Gateways](#8-gateways)
 9. [Network Diagnostics](#9-network-diagnostics)
-10. [Mapping Management](#10-mapping-management)
-11. [Job Management](#11-job-management)
-12. [Storage Management](#12-storage-management)
-13. [System Metrics & Monitoring](#13-system-metrics--monitoring)
+10. [Mappings](#10-mappings)
+11. [Jobs](#11-jobs)
+12. [Storage Targets](#12-storage-targets)
+13. [System Metrics](#13-system-metrics)
 14. [Database Metrics](#14-database-metrics)
 15. [Reports](#15-reports)
-16. [Debug Endpoints](#16-debug-endpoints)
-17. [Notifications (REST)](#17-notifications-rest)
-18. [WebSocket Endpoints](#18-websocket-endpoints)
-19. [Authentication & Authorization](#authentication--authorization)
-20. [Error Handling](#error-handling)
-21. [Supported Protocols](#supported-protocols)
+16. [Notifications](#16-notifications)
+17. [WebSocket — Real-time Notifications](#17-websocket--real-time-notifications)
+18. [Debug](#18-debug)
+19. [Authentication & Authorization](#19-authentication--authorization)
+20. [Error Codes](#20-error-codes)
+21. [Supported Protocols](#21-supported-protocols)
+22. [Database Providers](#22-database-providers)
+23. [Environment Variables](#23-environment-variables)
 
 ---
 
-## 1. Health & Status Endpoints
+## 1. Health & System
 
-### Get Health Status
-**Endpoint:** `GET /health`
-**Authentication:** Public (no auth required)
+### GET /health
+
+Returns agent health status.
+
 **Response:**
 ```json
 {
@@ -48,25 +49,27 @@
 }
 ```
 
-### Get System Version & Tech Stack
-**Endpoint:** `GET /version`
-**Authentication:** Public
+### GET /version
+
+Returns detailed version and tech stack info.
+
 **Response:**
 ```json
 {
   "appVersion": "1.0.0",
-  "python": "3.11.0",
-  "platform": "Linux-6.18.6-arch1-1",
-  "fastapi": "0.104.1",
-  "sqlalchemy": "2.0.23",
-  "uvicorn": "0.24.0",
+  "python": "3.11.6",
+  "platform": "Linux-6.18.6-arch1-1-x86_64-with-glibc2.41",
+  "fastapi": "0.115.6",
+  "sqlalchemy": "2.0.36",
+  "uvicorn": "0.34.0",
   "port": 5175
 }
 ```
 
-### Shutdown Agent
-**Endpoint:** `POST /shutdown`
-**Authentication:** Public
+### POST /shutdown
+
+Gracefully shuts down the agent (200ms delay for response flush).
+
 **Response:**
 ```json
 {
@@ -77,98 +80,110 @@
 
 ---
 
-## 2. Authentication Endpoints
+## 2. Authentication
 
-**Prefix:** `/auth`
-**Authentication:** Public (user registration/login)
+Prefix: `/auth`
 
-### Register New User
-**Endpoint:** `POST /auth/register`
-**Authentication:** Public
+### POST /auth/register
+
+Create a new user in Keycloak.
+
 **Request Body:**
 ```json
 {
-  "username": "john_doe",
+  "username": "john",
   "email": "john@example.com",
-  "password": "secure_password",
+  "password": "secret123",
   "first_name": "John",
   "last_name": "Doe",
   "enabled": true
 }
 ```
-**Response:**
+
+| Field | Type | Required | Default |
+|-------|------|----------|---------|
+| username | string | Yes | — |
+| email | string | Yes | — |
+| password | string | Yes | — |
+| first_name | string | No | `""` |
+| last_name | string | No | `""` |
+| enabled | boolean | No | `true` |
+
+**Response (200):**
 ```json
 {
   "ok": true,
-  "user_id": "uuid",
-  "username": "john_doe",
+  "user_id": "aed23084-0997-4e2e-8c2c-01d1dc866044",
+  "username": "john",
   "email": "john@example.com"
 }
 ```
 
-### User Login
-**Endpoint:** `POST /auth/login`
-**Authentication:** Public
+### POST /auth/login
+
+Authenticate and get JWT tokens.
+
 **Request Body:**
 ```json
 {
-  "username": "john_doe",
-  "password": "secure_password"
-}
-```
-**Response:**
-```json
-{
-  "access_token": "eyJ...",
-  "refresh_token": "eyJ...",
-  "token_type": "bearer"
+  "username": "rohith",
+  "password": "neuract"
 }
 ```
 
-### Assign Admin Role
-**Endpoint:** `POST /auth/assign-role/{username}`
-**Authentication:** Public
-**URL Parameters:** `username` (string)
-**Response:**
+**Response (200):**
+```json
+{
+  "access_token": "eyJhbGciOiJSUzI1NiIs...",
+  "expires_in": 300,
+  "refresh_expires_in": 1800,
+  "refresh_token": "eyJhbGciOiJIUzUxMiIs...",
+  "token_type": "Bearer",
+  "not-before-policy": 0,
+  "session_state": "...",
+  "scope": "profile email"
+}
+```
+
+### POST /auth/assign-role/{username}
+
+Assign `neuract-admin` client role to a user.
+
+**Path Parameters:** `username` (string)
+
+**Response (200):**
 ```json
 {
   "ok": true,
-  "username": "john_doe",
-  "user_id": "uuid",
-  "client": "neuract-admin",
+  "username": "john",
+  "user_id": "aed23084-...",
+  "client": "neuract_owner",
   "role": "neuract-admin"
 }
 ```
 
 ---
 
-## 3. Schema Management
+## 3. Schemas
 
-**Prefix:** `/` (root)
-**Authentication:** Public
+### GET /schemas
 
-### List All Schemas
-**Endpoint:** `GET /schemas`
+List all schemas.
+
 **Response:**
 ```json
 {
   "items": [
     {
       "id": "schema_1",
-      "name": "Temperature Sensor",
+      "name": "Temperature Sensors",
       "fields": [
         {
           "key": "temperature",
           "type": "float",
           "unit": "°C",
           "scale": 0.1,
-          "desc": "Room temperature"
-        },
-        {
-          "key": "humidity",
-          "type": "float",
-          "unit": "%",
-          "scale": 1.0
+          "desc": "Ambient temperature"
         }
       ]
     }
@@ -176,54 +191,68 @@
 }
 ```
 
-### Create Schema
-**Endpoint:** `POST /schemas`
+### POST /schemas
+
+> **Auth:** Requires `logger_write` role
+
+Create a new schema.
+
 **Request Body:**
 ```json
 {
-  "id": "schema_1",
-  "name": "Sensor Schema",
+  "id": "temp_schema",
+  "name": "Temperature Schema",
   "fields": [
-    {
-      "key": "temperature",
-      "type": "float",
-      "unit": "°C",
-      "scale": 0.1,
-      "desc": "Temperature reading"
-    },
-    {
-      "key": "status",
-      "type": "string"
-    }
+    { "key": "temperature", "type": "float", "unit": "°C", "scale": 0.1 },
+    { "key": "humidity", "type": "float", "unit": "%", "desc": "Relative humidity" }
   ]
 }
 ```
-**Response:**
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| id | string | No | Auto-generated if omitted |
+| name | string | Yes | Schema display name |
+| fields | array | Yes | At least one field |
+| fields[].key | string | Yes | Alphanumeric + underscore only |
+| fields[].type | string | No | Data type |
+| fields[].unit | string | No | Unit label |
+| fields[].scale | number | No | Scale factor |
+| fields[].desc | string | No | Description |
+
+**Response (200):**
 ```json
 {
   "success": true,
   "message": "schema_created",
-  "item": { /* schema object */ }
+  "item": { "id": "temp_schema", "name": "Temperature Schema", "fields": [...] }
 }
 ```
 
-### Export Schemas
-**Endpoint:** `GET /schemas/export`
+### GET /schemas/export
+
+Export all schemas.
+
 **Response:**
 ```json
 {
-  "schemas": [ /* array of schemas */ ]
+  "schemas": [ ... ]
 }
 ```
 
-### Import Schemas
-**Endpoint:** `POST /schemas/import`
+### POST /schemas/import
+
+> **Auth:** Requires `logger_write` role
+
+Import schemas from export payload.
+
 **Request Body:**
 ```json
 {
-  "schemas": [ /* array of schema objects */ ]
+  "schemas": [ ... ]
 }
 ```
+
 **Response:**
 ```json
 {
@@ -231,28 +260,52 @@
 }
 ```
 
+### DELETE /schemas/{schema_id}
+
+> **Auth:** Requires `logger_write` role
+
+Delete a schema. Fails if tables are linked to it.
+
+**Response (success):**
+```json
+{
+  "success": true
+}
+```
+
+**Response (schema has linked tables):**
+```json
+{
+  "detail": "SCHEMA_IN_USE"
+}
+```
+
 ---
 
-## 4. Table Management
+## 4. Tables
 
-**Prefix:** `/tables`
-**Authentication:** Public (for most operations)
+Prefix: `/tables`
 
-### List Tables
-**Endpoint:** `GET /tables`
+### GET /tables
+
+List tables with pagination and filters.
+
 **Query Parameters:**
-- `parentSchemaId` (optional): Filter by schema
-- `dbTargetId` (optional): Filter by database target
-- `status` (optional): Filter by status (not_migrated, migrated)
-- `name` (optional): Filter by name pattern
-- `page` (optional, default=1): Page number
-- `pageSize` (optional, default=50): Items per page
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| parentSchemaId | string | — | Filter by schema |
+| dbTargetId | string | — | Filter by DB target |
+| status | string | — | `"migrated"` or `"not_migrated"` |
+| name | string | — | Name filter |
+| page | int | 1 | Page number |
+| pageSize | int | 50 | Items per page |
 
 **Response:**
 ```json
 {
   "success": true,
-  "total": 10,
+  "total": 25,
   "page": 1,
   "items": [
     {
@@ -261,46 +314,62 @@
       "schemaId": "schema_1",
       "dbTargetId": "target_1",
       "status": "migrated",
-      "lastMigratedAt": "2024-02-13T10:30:00+05:30",
-      "parentSchema": {
-        "id": "schema_1",
-        "name": "Sensor Schema"
-      },
+      "lastMigratedAt": "2025-01-15T10:30:00Z",
+      "parentSchema": { "id": "schema_1", "name": "Temperature Schema" },
       "dbTarget": { "id": "target_1" },
       "columnCount": 3,
       "mappingExists": true,
-      "mappingStatus": "complete",
-      "mappingRows": { /* mapping details */ }
+      "mappingStatus": "Mapped",
+      "mappingRows": { "temperature": { "protocol": "modbus", "address": "100" } }
     }
   ]
 }
 ```
 
-### Create Tables (Bulk)
-**Endpoint:** `POST /tables/bulk_create`
+### POST /tables/bulk_create
+
+> **Auth:** Requires `logger_write` role
+
+Create one or more tables.
+
 **Request Body:**
 ```json
 {
   "parentSchemaId": "schema_1",
-  "names": ["table1", "table2", "table3"],
-  "dbTargetId": "target_1"
+  "names": ["sensor_01", "sensor_02"],
+  "dbTargetId": "target_1",
+  "deviceId": "dev_123"
 }
 ```
-**Supports name expansion:** `"pattern": "sensor_{0..10}"`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `parentSchemaId` | string | Yes | Schema ID to use |
+| `names` / `name` / `pattern` | string[] / string | Yes | Table name(s), supports `{1..10}` patterns |
+| `dbTargetId` | string | No | Storage target (defaults to system default) |
+| `deviceId` | string | No | Device to bind to the created tables |
+
+Supports pattern expansion: `"pattern": "sensor_{1..10}"` generates `sensor_1` through `sensor_10`.
 
 **Response:**
 ```json
 {
   "success": true,
   "message": "tables_created",
-  "count": 3,
-  "items": [ /* created table objects */ ],
-  "warnings": [ /* normalization warnings */ ]
+  "count": 2,
+  "items": [ ... ],
+  "warnings": [
+    { "original": "Sensor 01", "normalized": "sensor_01" }
+  ]
 }
 ```
 
-### Update Target for Tables (Bulk)
-**Endpoint:** `POST /tables/bulk_update_target`
+### POST /tables/bulk_update_target
+
+> **Auth:** Requires `logger_write` role
+
+Update database target for multiple tables.
+
 **Request Body:**
 ```json
 {
@@ -308,51 +377,58 @@
   "ids": ["table_1", "table_2"]
 }
 ```
+
 **Response:**
 ```json
 {
   "success": true,
   "updated": 2,
-  "items": [ /* updated table objects */ ]
+  "items": [ ... ]
 }
 ```
 
-### Discover Tables
-**Endpoint:** `GET /tables/discover`
+### GET /tables/discover
+
+Discover planned (not yet migrated) and migrated tables.
+
 **Query Parameters:** `dbTargetId` (optional)
+
 **Response:**
 ```json
 {
   "success": true,
-  "planned": [ /* tables not yet migrated */ ],
-  "migrated": [ /* tables that exist in database */ ]
+  "planned": [ ... ],
+  "migrated": [ ... ]
 }
 ```
 
-### Get Table Details
-**Endpoint:** `GET /tables/{table_id}`
+### GET /tables/{table_id}
+
+Get table details with schema and mapping health.
+
 **Response:**
 ```json
 {
   "success": true,
-  "item": { /* table object */ },
-  "schema": { /* schema with fields */ },
-  "mappingHealth": {
-    "complete": 2,
-    "incomplete": 1,
-    "unmapped": 0
-  }
+  "item": { ... },
+  "schema": { "id": "schema_1", "name": "...", "fields": [...] },
+  "mappingHealth": "Mapped"
 }
 ```
 
-### Dry Run DDL
-**Endpoint:** `POST /tables/dry_run_ddl`
+### POST /tables/dry_run_ddl
+
+> **Auth:** Requires `logger_write` role
+
+Preview SQL DDL without executing.
+
 **Request Body:**
 ```json
 {
   "ids": ["table_1", "table_2"]
 }
 ```
+
 **Response:**
 ```json
 {
@@ -370,44 +446,207 @@
 }
 ```
 
-### Migrate Tables to Database
-**Endpoint:** `POST /tables/migrate`
+### POST /tables/migrate
+
+> **Auth:** Requires `logger_write` role
+
+Create or update tables in the target database.
+
 **Request Body:**
 ```json
 {
   "ids": ["table_1", "table_2"]
 }
 ```
+
 **Response:**
 ```json
 {
   "success": true,
   "items": [
-    {
-      "id": "table_1",
-      "name": "neuract.sensor_data",
-      "status": "created"
-    }
+    { "id": "table_1", "name": "neuract.sensor_data", "status": "created" },
+    { "id": "table_2", "name": "neuract.pump_data", "status": "updated" }
+  ]
+}
+```
+
+### DELETE /tables/{table_id}
+
+> **Auth:** Requires `logger_write` role
+
+Delete a table from the meta DB. Optionally drops the physical table in the target DB.
+
+**Query Parameters:**
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `dropPhysical` | boolean | `false` | Also drop the physical table and mapping rows in the target DB |
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "table_deleted",
+  "physicalDropped": false
+}
+```
+
+**Error Responses:**
+- `404` — `TABLE_NOT_FOUND`
+- `409` — `TABLE_HAS_RUNNING_JOBS` (table is part of a running job)
+
+---
+
+### PATCH /tables/{table_id}
+
+> **Auth:** Requires `logger_write` role
+
+Update table properties (name, schema, target DB).
+
+**Request Body:**
+```json
+{
+  "name": "new_table_name",
+  "schemaId": "sch_123",
+  "dbTargetId": "db_456"
+}
+```
+All fields are optional — only include fields to update.
+
+**Response:**
+```json
+{
+  "success": true,
+  "item": { "id": "tbl_1", "name": "new_table_name", "schemaId": "sch_123", ... },
+  "warnings": ["Table is migrated; name change requires re-migration"]
+}
+```
+
+**Error Responses:**
+- `400` — `INVALID_NAME`, `SCHEMA_NOT_FOUND`, `NO_FIELDS_TO_UPDATE`
+- `404` — `TABLE_NOT_FOUND`
+
+---
+
+### POST /tables/{table_id}/bind_device
+
+> **Auth:** Requires `logger_write` role
+
+Bind a device to a table.
+
+**Request Body:**
+```json
+{
+  "deviceId": "dev_123"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "device_bound",
+  "tableId": "tbl_1",
+  "deviceId": "dev_123"
+}
+```
+
+**Error Responses:**
+- `400` — `DEVICE_ID_REQUIRED`
+- `404` — `TABLE_NOT_FOUND`, `DEVICE_NOT_FOUND`
+
+---
+
+### POST /tables/{table_id}/unbind_device
+
+> **Auth:** Requires `logger_write` role
+
+Remove device binding from a table.
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "device_unbound",
+  "tableId": "tbl_1"
+}
+```
+
+**Error Responses:**
+- `404` — `TABLE_NOT_FOUND`
+
+---
+
+### POST /tables/{table_id}/mappings/bulk
+
+> **Auth:** Requires `logger_write` role
+
+Bulk update mapping rows for a table. Delegates to `POST /mappings/{table_id}/bulk_apply`.
+
+**Request Body:**
+```json
+{
+  "deviceId": "dev_123",
+  "rows": {
+    "temperature": { "protocol": "modbus", "address": "0", "dataType": "float", "encoding": "float32" },
+    "status": { "protocol": "modbus", "address": "2", "dataType": "int", "encoding": "uint16_enum" }
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "mapping_upserted",
+  "item": { "deviceId": "dev_123", "rows": { ... } }
+}
+```
+
+---
+
+### POST /tables/{table_id}/mappings/validate
+
+> **Auth:** Requires `logger_write` role
+
+Validate mapping rows for a table. Delegates to `POST /mappings/{table_id}/validate`.
+
+**Response:**
+```json
+{
+  "success": true,
+  "health": "Mapped",
+  "problems": []
+}
+```
+
+If issues are found:
+```json
+{
+  "success": false,
+  "health": "Partially Mapped",
+  "problems": [
+    { "field": "temperature", "code": "TAG_UNREADABLE" }
   ]
 }
 ```
 
 ---
 
-## 5. Device Management
+## 5. Devices
 
-**Prefix:** `/devices`
-**Authentication:** Public
+Prefix: `/devices`
 
-### List Devices
-**Endpoint:** `GET /devices`
+### GET /devices
+
+List all devices.
+
 **Response:**
 ```json
 {
   "items": [
     {
       "id": "device_1",
-      "name": "Sensor 01",
+      "name": "Modbus Sensor 01",
       "protocol": "modbus",
       "gatewayId": "gateway_1",
       "port": 502,
@@ -415,16 +654,19 @@
       "status": "connected",
       "latencyMs": 45,
       "lastError": null,
-      "params": { /* protocol-specific params */ },
-      "autoReconnect": true,
-      "connected": true
+      "params": { "host": "192.168.1.100" },
+      "autoReconnect": true
     }
   ]
 }
 ```
 
-### Create Device
-**Endpoint:** `POST /devices`
+### POST /devices
+
+> **Auth:** Requires `logger_write` role
+
+Create a device (also performs connection test).
+
 **Request Body:**
 ```json
 {
@@ -433,23 +675,36 @@
   "gatewayId": "gateway_1",
   "port": 502,
   "unitId": 1,
-  "params": {
-    "host": "192.168.1.100"
-  }
+  "params": { "host": "192.168.1.100" }
 }
 ```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| name | string | Yes | Device display name |
+| protocol | string | No | `"modbus"` or `"opcua"` |
+| gatewayId | string | No | Link to gateway |
+| port | int | No | Connection port |
+| unitId | int | No | Modbus unit ID |
+| params | object | No | Protocol-specific parameters |
+| autoReconnect | boolean | No | Auto-reconnect on failure |
+
 **Response:**
 ```json
 {
   "success": true,
-  "item": { /* device object */ },
+  "item": { ... },
   "error": null
 }
 ```
 
-### Update Device
-**Endpoint:** `PUT /devices/{dev_id}`
-**Request Body:** (partial update)
+### PUT /devices/{dev_id}
+
+> **Auth:** Requires `logger_write` role
+
+Update device metadata (partial update).
+
+**Request Body:**
 ```json
 {
   "name": "Updated Name",
@@ -459,16 +714,19 @@
   "gatewayId": "gateway_2"
 }
 ```
+
 **Response:**
 ```json
 {
   "success": true,
-  "item": { /* updated device */ }
+  "item": { ... }
 }
 ```
 
-### Delete Device
-**Endpoint:** `DELETE /devices/{dev_id}`
+### DELETE /devices/{dev_id}
+
+Delete a device.
+
 **Response:**
 ```json
 {
@@ -476,8 +734,12 @@
 }
 ```
 
-### Connect Device
-**Endpoint:** `POST /devices/{dev_id}/connect`
+### POST /devices/{dev_id}/connect
+
+> **Auth:** Requires `logger_write` role
+
+Test connection and mark device as connected.
+
 **Response:**
 ```json
 {
@@ -486,8 +748,12 @@
 }
 ```
 
-### Disconnect Device
-**Endpoint:** `POST /devices/{dev_id}/disconnect`
+### POST /devices/{dev_id}/disconnect
+
+> **Auth:** Requires `logger_write` role
+
+Mark device as disconnected.
+
 **Response:**
 ```json
 {
@@ -495,8 +761,12 @@
 }
 ```
 
-### Quick Test Device Connection
-**Endpoint:** `POST /devices/{dev_id}/quick_test`
+### POST /devices/{dev_id}/quick_test
+
+> **Auth:** Requires `logger_write` role
+
+Quick connection test without changing device state.
+
 **Response:**
 ```json
 {
@@ -508,28 +778,35 @@
 
 ---
 
-## 6. Protocol Types Management
+## 6. Protocol Types
 
-**Prefix:** `/protocol_types`
-**Authentication:** Public
+Prefix: `/protocol_types`
 
-### List Protocol Types
-**Endpoint:** `GET /protocol_types`
+### GET /protocol_types
+
+List all registered protocol types.
+
 **Response:**
 ```json
 {
-  "items": ["modbus", "opcua", "s7", "dnp3"]
+  "items": [
+    { "type": "modbus" },
+    { "type": "opcua" }
+  ]
 }
 ```
 
-### Create Protocol Type
-**Endpoint:** `POST /protocol_types`
+### POST /protocol_types
+
+Add a new protocol type.
+
 **Request Body:**
 ```json
 {
   "type": "custom_protocol"
 }
 ```
+
 **Response:**
 ```json
 {
@@ -538,9 +815,10 @@
 }
 ```
 
-### Delete Protocol Type
-**Endpoint:** `DELETE /protocol_types/{protocol_type}`
-**Fails if:** Devices or gateways are using this protocol
+### DELETE /protocol_types/{protocol_type}
+
+Delete a protocol type. Fails if devices or gateways are using it.
+
 **Response:**
 ```json
 {
@@ -552,11 +830,12 @@
 
 ## 7. Bulk Import
 
-**Prefix:** `/bulk_import`
-**Authentication:** Public
+Prefix: `/bulk_import`
 
-### Bulk Import Devices
-**Endpoint:** `POST /bulk_import/devices`
+### POST /bulk_import/devices
+
+Import devices from spreadsheet data. Auto-creates gateways by IP.
+
 **Request Body:**
 ```json
 {
@@ -571,7 +850,7 @@
       "connections": "Factory Floor"
     },
     {
-      "name": "Device 2",
+      "name": "OPC UA Device",
       "ip": "192.168.1.101",
       "protocol": "opcua",
       "port": 4840
@@ -579,6 +858,17 @@
   ]
 }
 ```
+
+| Field | Type | Required | Default | Notes |
+|-------|------|----------|---------|-------|
+| name | string | Yes | — | Device name |
+| ip | string | Yes | — | IP for gateway lookup/creation |
+| port | int | No | — | Connection port |
+| mac | string | No | — | MAC address |
+| protocol | string | No | `"modbus"` | Protocol type |
+| unit | int | No | — | Modbus unit ID (1-247) |
+| connections | string | No | — | Gateway name |
+
 **Response:**
 ```json
 {
@@ -594,33 +884,27 @@
     {
       "row": 0,
       "status": "created",
-      "device": { /* device object */ },
-      "gateway": { /* gateway object */ },
+      "device": { ... },
+      "gateway": { ... },
       "gateway_created": true,
+      "connected": true,
+      "latencyMs": 42,
       "message": "Device created with new gateway"
     }
   ]
 }
 ```
 
-**Field Mapping:**
-- `name` (required): Device name
-- `ip` (required): IP address for gateway lookup/creation
-- `port` (optional): Port number
-- `mac` (optional): MAC address
-- `protocol` (optional, default="modbus"): Protocol type
-- `unit` (optional): Modbus unit ID (1-247)
-- `connections` (optional): Gateway name
-
 ---
 
-## 8. Gateway Management
+## 8. Gateways
 
-**Prefix:** `/networking/gateways`
-**Authentication:** Protected (requires admin for write operations)
+Prefix: `/networking/gateways`
 
-### List Gateways
-**Endpoint:** `GET /networking/gateways`
+### GET /networking/gateways
+
+List all gateways.
+
 **Response:**
 ```json
 {
@@ -631,15 +915,16 @@
       "host": "192.168.1.50",
       "protocol_hint": "modbus",
       "ports": [502, 503],
-      "status": "active",
-      "lastHealthCheck": "2024-02-13T10:30:00Z"
+      "status": "active"
     }
   ]
 }
 ```
 
-### List Gateways with Devices
-**Endpoint:** `GET /networking/gateways_with_devices`
+### GET /networking/gateways_with_devices
+
+List gateways with their linked devices.
+
 **Response:**
 ```json
 {
@@ -648,15 +933,17 @@
       "id": "gateway_1",
       "name": "Main PLC Gateway",
       "host": "192.168.1.50",
-      "devices": [ /* array of device objects */ ],
+      "devices": [ ... ],
       "deviceCount": 5
     }
   ]
 }
 ```
 
-### Add Gateway
-**Endpoint:** `POST /networking/gateways`
+### POST /networking/gateways
+
+Add a gateway.
+
 **Request Body:**
 ```json
 {
@@ -666,33 +953,39 @@
   "ports": [502]
 }
 ```
+
 **Response:**
 ```json
 {
   "success": true,
-  "item": { /* gateway object */ }
+  "item": { ... }
 }
 ```
 
-### Update Gateway
-**Endpoint:** `PUT /networking/gateways/{gid}`
-**Request Body:** (partial update)
+### PUT /networking/gateways/{gid}
+
+Update a gateway (partial update).
+
+**Request Body:**
 ```json
 {
   "name": "Updated Name",
   "ports": [502, 503, 504]
 }
 ```
+
 **Response:**
 ```json
 {
   "success": true,
-  "item": { /* updated gateway */ }
+  "item": { ... }
 }
 ```
 
-### Delete Gateway
-**Endpoint:** `DELETE /networking/gateways/{gid}`
+### DELETE /networking/gateways/{gid}
+
+Delete a gateway. Fails if devices are linked to it (400).
+
 **Response:**
 ```json
 {
@@ -700,8 +993,10 @@
 }
 ```
 
-### Ping Gateway
-**Endpoint:** `POST /networking/gateways/{gid}/ping`
+### POST /networking/gateways/{gid}/ping
+
+ICMP ping a gateway. Rate-limited (3 second minimum interval, 429 if too frequent).
+
 **Request Body:**
 ```json
 {
@@ -709,6 +1004,7 @@
   "timeoutMs": 800
 }
 ```
+
 **Response:**
 ```json
 {
@@ -717,12 +1013,14 @@
   "min": 15,
   "avg": 20,
   "max": 28,
-  "samples": [15, 20, 28]
+  "samples": [15, 20, 28, 18]
 }
 ```
 
-### TCP Test on Gateway Ports
-**Endpoint:** `POST /networking/gateways/{gid}/tcp`
+### POST /networking/gateways/{gid}/tcp
+
+TCP port test on a gateway.
+
 **Request Body:**
 ```json
 {
@@ -730,23 +1028,14 @@
   "timeoutMs": 1000
 }
 ```
+
 **Response:**
 ```json
 {
   "ok": true,
   "results": [
-    {
-      "port": 502,
-      "ok": true,
-      "status": "open",
-      "timeMs": 45
-    },
-    {
-      "port": 503,
-      "ok": false,
-      "status": "closed",
-      "message": "Connection refused"
-    }
+    { "port": 502, "ok": true, "status": "open", "timeMs": 45 },
+    { "port": 503, "ok": false, "status": "closed", "timeMs": 0 }
   ]
 }
 ```
@@ -755,11 +1044,12 @@
 
 ## 9. Network Diagnostics
 
-**Prefix:** `/networking`
-**Authentication:** Protected
+Prefix: `/networking`
 
-### List Network Interfaces
-**Endpoint:** `GET /networking/nics`
+### GET /networking/nics
+
+List active network interfaces.
+
 **Response:**
 ```json
 {
@@ -775,8 +1065,10 @@
 }
 ```
 
-### Ping Host
-**Endpoint:** `POST /networking/ping`
+### POST /networking/ping
+
+ICMP ping any host.
+
 **Request Body:**
 ```json
 {
@@ -785,6 +1077,9 @@
   "timeoutMs": 800
 }
 ```
+
+`host` is also accepted as an alias for `target`.
+
 **Response:**
 ```json
 {
@@ -793,12 +1088,14 @@
   "min": 12,
   "avg": 18,
   "max": 25,
-  "samples": [12, 18, 25]
+  "samples": [12, 18, 25, 17]
 }
 ```
 
-### TCP Test
-**Endpoint:** `POST /networking/tcp_test`
+### POST /networking/tcp_test
+
+TCP port connectivity test.
+
 **Request Body:**
 ```json
 {
@@ -807,6 +1104,7 @@
   "timeoutMs": 1000
 }
 ```
+
 **Response:**
 ```json
 {
@@ -816,8 +1114,12 @@
 }
 ```
 
-### Modbus Test
-**Endpoint:** `POST /networking/modbus/test`
+Status values: `"open"`, `"timeout"`, `"closed"`
+
+### POST /networking/modbus/test
+
+Test Modbus TCP register read.
+
 **Request Body:**
 ```json
 {
@@ -828,18 +1130,30 @@
   "count": 1
 }
 ```
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| deviceId | string | — | Read host/port from device config |
+| host / ip | string | — | Direct host |
+| port | int | 502 | Modbus port |
+| unitId | int | 1 | Slave address |
+| address | int | 1 | Register address |
+| count | int | 1 | Number of registers |
+
 **Response:**
 ```json
 {
   "ok": true,
   "protocol": "modbus",
-  "values": [1234, 5678],
+  "values": [1234],
   "latencyMs": 52
 }
 ```
 
-### OPC UA Test
-**Endpoint:** `POST /networking/opcua/test`
+### POST /networking/opcua/test
+
+Test OPC UA endpoint (optionally read a node).
+
 **Request Body:**
 ```json
 {
@@ -847,6 +1161,13 @@
   "nodeId": "ns=2;i=2"
 }
 ```
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| deviceId | string | — | Read endpoint from device config |
+| endpoint | string | `opc.tcp://127.0.0.1:4840` | OPC UA endpoint URL |
+| nodeId | string | — | If provided, reads the node value |
+
 **Response:**
 ```json
 {
@@ -858,8 +1179,10 @@
 }
 ```
 
-### OPC UA Browse
-**Endpoint:** `POST /networking/opcua/browse`
+### POST /networking/opcua/browse
+
+Browse OPC UA node tree.
+
 **Request Body:**
 ```json
 {
@@ -867,32 +1190,35 @@
   "nodeId": "i=85"
 }
 ```
+
+| Field | Type | Default |
+|-------|------|---------|
+| endpoint | string | `opc.tcp://127.0.0.1:4840/freeopcua/server/` |
+| nodeId | string | `i=85` (Objects root) |
+
 **Response:**
 ```json
 {
   "ok": true,
   "items": [
-    {
-      "nodeId": "ns=0;i=84",
-      "browseName": "0:Objects"
-    },
-    {
-      "nodeId": "ns=0;i=86",
-      "browseName": "0:Views"
-    }
+    { "nodeId": "ns=0;i=84", "browseName": "0:Objects" },
+    { "nodeId": "ns=0;i=86", "browseName": "0:Views" }
   ]
 }
 ```
 
 ---
 
-## 10. Mapping Management
+## 10. Mappings
 
-**Prefix:** `/mappings`
-**Authentication:** Public
+Prefix: `/mappings`
 
-### Get Mapping
-**Endpoint:** `GET /mappings/{table_id}`
+Mappings bind schema fields to device registers/nodes.
+
+### GET /mappings/{table_id}
+
+Get mapping for a table.
+
 **Response:**
 ```json
 {
@@ -904,6 +1230,7 @@
       "temperature": {
         "protocol": "modbus",
         "address": "100",
+        "dataType": "float",
         "encoding": "float32",
         "scale": 0.1,
         "deadband": 0.5
@@ -911,102 +1238,86 @@
       "humidity": {
         "protocol": "modbus",
         "address": "102",
+        "dataType": "float",
         "encoding": "float32",
         "scale": 1.0
       }
     }
   },
-  "health": {
-    "status": "Mapped",
-    "complete": 2,
-    "incomplete": 0,
-    "unmapped": 0
-  }
+  "health": "Mapped"
 }
 ```
 
-### Upsert Mapping
-**Endpoint:** `POST /mappings/{table_id}`
+Health values: `"Mapped"`, `"Partially Mapped"`, `"Unmapped"`
+
+### POST /mappings/{table_id}
+
+Upsert mapping (partial update — merges with existing rows).
+
 **Request Body:**
 ```json
 {
   "deviceId": "device_1",
+  "dbTargetId": "target_1",
   "rows": {
     "temperature": {
       "protocol": "modbus",
       "address": "100",
       "encoding": "float32",
       "scale": 0.1
-    },
-    "humidity": {
-      "protocol": "modbus",
-      "address": "102",
-      "encoding": "float32"
     }
-  },
-  "dbTargetId": "target_1"
+  }
 }
 ```
+
 **Response:**
 ```json
 {
   "success": true,
-  "message": "mapping_upserted",
-  "item": { /* mapping object */ },
-  "health": { /* health status */ }
+  "item": { ... },
+  "health": "Partially Mapped"
 }
 ```
 
-### Bulk Apply Mapping
-**Endpoint:** `POST /mappings/{table_id}/bulk_apply`
+### POST /mappings/{table_id}/bulk_apply
+
+Replace all rows at once.
+
 **Request Body:**
 ```json
 {
-  "rows": { /* mapping rows */ },
   "deviceId": "device_1",
-  "dbTargetId": "target_1"
-}
-```
-**Response:**
-```json
-{
-  "success": true,
-  "message": "mapping_applied",
-  "item": { /* mapping object */ }
+  "dbTargetId": "target_1",
+  "rows": { ... }
 }
 ```
 
-### Import Mapping
-**Endpoint:** `POST /mappings/{table_id}/import`
+### POST /mappings/{table_id}/import
+
+Import mapping (full replacement).
+
 **Request Body:**
 ```json
 {
   "mapping": {
     "deviceId": "device_1",
-    "rows": { /* mapping rows */ }
-  },
-  "dbTargetId": "target_1"
-}
-```
-**Response:**
-```json
-{
-  "success": true,
-  "message": "mapping_imported",
-  "item": { /* mapping object */ },
-  "health": { /* health status */ }
+    "rows": { ... }
+  }
 }
 ```
 
-### Validate Mapping
-**Endpoint:** `POST /mappings/{table_id}/validate`
-**Request Body:** (optional payload)
+### POST /mappings/{table_id}/validate
+
+Validate mapping. Checks device binding, field completeness, and live-read.
+
+**Request Body (optional):**
 ```json
 {
-  "rows": { /* mapping to validate */ },
+  "rows": { ... },
   "deviceId": "device_1"
 }
 ```
+
 **Response:**
 ```json
 {
@@ -1015,69 +1326,78 @@
   "problems": [
     {
       "field": "temperature",
-      "code": "TAG_UNREADABLE",
-      "message": "Cannot read from device"
+      "code": "TAG_UNREADABLE"
     }
   ]
 }
 ```
 
-### Delete Mapping Row
-**Endpoint:** `DELETE /mappings/{table_id}/{field_key}`
+Problem codes: `DEVICE_NOT_BOUND`, `MAPPING_INCOMPLETE`, `MAPPING_TYPE_MISMATCH`, `TAG_UNREADABLE`
+
+### DELETE /mappings/{table_id}/{field_key}
+
+Delete a single field mapping.
+
 **Response:**
 ```json
 {
   "success": true,
   "message": "row_deleted",
-  "item": { /* updated mapping */ }
+  "item": { ... }
 }
 ```
 
-### Export Mapping
-**Endpoint:** `GET /mappings/{table_id}/export`
+### GET /mappings/{table_id}/export
+
+Export mapping for a table.
+
 **Response:**
 ```json
 {
   "mapping": {
     "deviceId": "device_1",
-    "rows": { /* all mapping rows */ }
+    "rows": { ... }
   }
 }
 ```
 
-### Copy Mapping
-**Endpoint:** `POST /mappings/{src_table_id}/copy_to/{dst_table_id}`
+### POST /mappings/{src_table_id}/copy_to/{dst_table_id}
+
+Copy mapping between tables (must share the same DB target).
+
 **Response:**
 ```json
 {
   "success": true,
   "message": "mapping_copied",
-  "item": { /* copied mapping */ }
+  "item": { ... }
 }
 ```
 
 ---
 
-## 11. Job Management
+## 11. Jobs
 
-**Prefix:** `/jobs`
-**Authentication:** Protected (Keycloak JWT required)
+Prefix: `/jobs2`
 
-### List Jobs
-**Endpoint:** `GET /jobs`
+Jobs manage data logging lifecycle. The `jobs2` router handles job state management — actual execution is handled by the external Rust job runner.
+
+### GET /jobs2
+
+List all jobs.
+
 **Response:**
 ```json
 {
   "items": [
     {
-      "id": "job_1",
+      "id": "job_1773669704217",
       "name": "Data Collector 1",
       "type": "continuous",
       "tables": ["table_1", "table_2"],
       "intervalMs": 1000,
       "status": "running",
       "enabled": true,
-      "triggers": [],
       "batching": {},
       "cpuBudget": "balanced"
     }
@@ -1085,15 +1405,19 @@
 }
 ```
 
-### Create Job
-**Endpoint:** `POST /jobs`
+### POST /jobs2
+
+> **Auth:** Requires `logger_write` role
+
+Create a new job.
+
 **Request Body:**
 ```json
 {
-  "name": "New Job",
+  "name": "Temperature Logger",
   "type": "continuous",
   "tables": ["table_1", "table_2"],
-  "intervalMs": 1000,
+  "intervalMs": 5000,
   "enabled": true,
   "triggers": [
     {
@@ -1104,30 +1428,32 @@
       "deadband": 2,
       "cooldownMs": 5000
     }
-  ]
+  ],
+  "batching": {},
+  "cpuBudget": "balanced"
 }
 ```
 
 **Job Types:**
-- `continuous`: Periodic data collection
-- `trigger`: Event-based data collection
+- `continuous` — Periodic data collection at `intervalMs`
+- `trigger` — Event-based data collection
 
-**Trigger Operators:**
-- `change`: Value changed beyond deadband
-- `>`, `>=`, `<`, `<=`, `==`, `!=`: Comparison operators
-- `rising`: Value crossed threshold upward
-- `falling`: Value crossed threshold downward
+**Trigger Operators:** `change`, `>`, `>=`, `<`, `<=`, `==`, `!=`, `rising`, `falling`
 
 **Response:**
 ```json
 {
   "success": true,
-  "item": { /* job object */ }
+  "item": { ... }
 }
 ```
 
-### Start Job
-**Endpoint:** `POST /jobs/{job_id}/start`
+### POST /jobs2/{job_id}/start
+
+> **Auth:** Requires `logger_write` role
+
+Start a job. Sets status to `"running"` and sends a notification to all users with the `logger_read` role (background task).
+
 **Response:**
 ```json
 {
@@ -1136,8 +1462,20 @@
 }
 ```
 
-### Pause Job
-**Endpoint:** `POST /jobs/{job_id}/pause`
+If already running:
+```json
+{
+  "success": true,
+  "message": "already_running"
+}
+```
+
+### POST /jobs2/{job_id}/pause
+
+> **Auth:** Requires `logger_write` role
+
+Pause a job.
+
 **Response:**
 ```json
 {
@@ -1146,8 +1484,12 @@
 }
 ```
 
-### Stop Job
-**Endpoint:** `POST /jobs/{job_id}/stop`
+### POST /jobs2/{job_id}/stop
+
+> **Auth:** Requires `logger_write` role
+
+Stop a job.
+
 **Response:**
 ```json
 {
@@ -1156,8 +1498,12 @@
 }
 ```
 
-### Stop All Jobs
-**Endpoint:** `POST /jobs/stop_all`
+### POST /jobs2/stop_all
+
+> **Auth:** Requires `logger_write` role
+
+Stop all jobs.
+
 **Response:**
 ```json
 {
@@ -1166,8 +1512,12 @@
 }
 ```
 
-### Dry Run Job
-**Endpoint:** `POST /jobs/{job_id}/dry_run`
+### POST /jobs2/{job_id}/dry_run
+
+> **Auth:** Requires `logger_write` role
+
+Sample device values without writing to the database.
+
 **Response:**
 ```json
 {
@@ -1175,18 +1525,44 @@
   "items": [
     {
       "tableId": "table_1",
-      "values": {
-        "temperature": 45.5,
-        "humidity": 65.2
-      },
-      "ts": "2024-02-13T10:30:00Z"
+      "values": { "temperature": 45.5, "humidity": 65.2 },
+      "ts": "2025-01-15T10:30:00+00:00"
+    },
+    {
+      "tableId": "table_2",
+      "error": "DEVICE_NOT_BOUND"
     }
   ]
 }
 ```
 
-### Delete Job
-**Endpoint:** `DELETE /jobs/{job_id}`
+### POST /jobs2/{job_id}/backfill
+
+> **Auth:** Requires `logger_write` role
+
+Write one sample row per table to the database.
+
+**Response:**
+```json
+{
+  "success": true,
+  "wrote": 2
+}
+```
+
+On partial failure:
+```json
+{
+  "success": false,
+  "message": "DEVICE_NOT_FOUND",
+  "wrote": 1
+}
+```
+
+### DELETE /jobs2/{job_id}
+
+Delete a job and clear its metrics/history.
+
 **Response:**
 ```json
 {
@@ -1194,63 +1570,38 @@
 }
 ```
 
-### Bulk Delete Jobs
-**Endpoint:** `DELETE /jobs`
+### DELETE /jobs2
+
+Bulk delete jobs.
+
 **Request Body:**
 ```json
 {
   "ids": ["job_1", "job_2", "job_3"]
 }
 ```
+
 **Response:**
 ```json
 {
   "success": true,
   "deleted": 2,
   "failed": [
-    {
-      "id": "job_3",
-      "error": "JOB_NOT_FOUND"
-    }
+    { "id": "job_3", "error": "JOB_NOT_FOUND" }
   ]
 }
 ```
 
-### Get Job Metrics
-**Endpoint:** `GET /jobs/{job_id}/metrics`
-**Query Parameters:** `range` (optional, e.g., "5m", "1h", "900s")
-**Response:**
-```json
-{
-  "ok": true,
-  "data": {
-    "timeseries": [
-      {
-        "ts": 1707815400,
-        "reads_ok": 120,
-        "reads_err": 2,
-        "writes_ok": 118,
-        "writes_err": 0,
-        "read_lat_avg": 25.5,
-        "write_lat_avg": 45.2
-      }
-    ],
-    "summary": {
-      "reads_per_sec": 2.0,
-      "writes_per_sec": 1.97,
-      "read_lat_avg": 25.5,
-      "write_lat_avg": 45.2,
-      "error_pct": 1.67
-    }
-  }
-}
-```
+### GET /jobs2/{job_id}/runs
 
-### Get Job Runs
-**Endpoint:** `GET /jobs/{job_id}/runs`
+Get job execution history.
+
 **Query Parameters:**
-- `frm` (optional): Start timestamp
-- `to` (optional): End timestamp
+
+| Param | Type | Description |
+|-------|------|-------------|
+| frm | string | Start datetime filter |
+| to | string | End datetime filter |
 
 **Response:**
 ```json
@@ -1260,8 +1611,8 @@
     {
       "id": 1,
       "job_id": "job_1",
-      "started_at": "2024-02-13T10:00:00Z",
-      "stopped_at": "2024-02-13T10:01:00Z",
+      "started_at": "2025-01-15T10:00:00Z",
+      "stopped_at": "2025-01-15T10:01:00Z",
       "duration_ms": 60000,
       "rows": 120,
       "read_lat_avg": 25.5,
@@ -1272,80 +1623,24 @@
 }
 ```
 
-### Get Job Errors
-**Endpoint:** `GET /jobs/{job_id}/errors`
-**Query Parameters:**
-- `frm` (optional): Start timestamp
-- `to` (optional): End timestamp
-
-**Response:**
-```json
-{
-  "ok": true,
-  "data": [
-    {
-      "code": "READ_ERROR",
-      "count": 5,
-      "lastMessage": "Connection timeout",
-      "lastTs": 1707815400000
-    }
-  ]
-}
-```
-
-### Get Job Metrics Summary
-**Endpoint:** `GET /jobs/metrics/summary`
-**Response:**
-```json
-{
-  "ok": true,
-  "data": [
-    {
-      "jobId": "job_1",
-      "reads_per_sec": 2.0,
-      "writes_per_sec": 1.97,
-      "read_lat_avg": 25.5,
-      "write_lat_avg": 45.2,
-      "error_pct": 1.67
-    }
-  ]
-}
-```
-
-### Backfill Job Data
-**Endpoint:** `POST /jobs/{job_id}/backfill`
-**Response:**
-```json
-{
-  "success": true,
-  "wrote": 2
-}
-```
-
 ---
 
-## 12. Storage Management
+## 12. Storage Targets
 
-**Prefix:** `/storage/targets`
-**Authentication:** Protected
+Prefix: `/storage/targets`
 
-### List Database Targets
-**Endpoint:** `GET /storage/targets`
+### GET /storage/targets
+
+List database targets.
+
 **Response:**
 ```json
 {
   "items": [
     {
       "id": "target_1",
-      "provider": "sqlite",
-      "conn": "/data/myapp.db",
-      "status": "ok",
-      "lastMsg": "Test OK"
-    },
-    {
-      "id": "target_2",
       "provider": "postgres",
-      "conn": "postgresql://user:pass@localhost/neuract",
+      "conn": "postgresql://postgres@localhost/neuract",
       "status": "ok",
       "lastMsg": "Connection OK"
     }
@@ -1354,72 +1649,69 @@
 }
 ```
 
-### Add Database Target
-**Endpoint:** `POST /storage/targets`
+### POST /storage/targets
+
+Add a database target.
+
 **Request Body:**
 ```json
 {
-  "provider": "sqlite",
-  "conn": "/data/myapp.db"
+  "provider": "postgres",
+  "conn": "postgresql://postgres@localhost/neuract"
 }
 ```
 
-**Supported Providers:**
-- `sqlite`: SQLite database
-- `postgres` / `postgresql`: PostgreSQL
-- `sqlserver` / `mssql`: Microsoft SQL Server
-- `mysql`: MySQL
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| id | string | No | Auto-generated |
+| provider | string | Yes | `sqlite`, `postgres`, `sqlserver`, `mysql` |
+| conn | string | Yes | Connection string |
 
 **Response:**
 ```json
 {
   "success": true,
-  "item": { /* target object */ }
+  "item": { ... }
 }
 ```
 
-### Update Database Target
-**Endpoint:** `PUT /storage/targets/{tid}`
-**Request Body:** (partial update)
-```json
-{
-  "status": "ok",
-  "lastMsg": "Connection verified"
-}
-```
-**Response:**
-```json
-{
-  "success": true,
-  "item": { /* updated target */ }
-}
-```
+### PUT /storage/targets/{tid}
 
-### Delete Database Target
-**Endpoint:** `DELETE /storage/targets/{tid}`
-**Query Parameters:** `force` (optional, boolean)
-**Response:**
-```json
-{
-  "success": true
-}
-```
+Update a database target (partial update).
 
-### Test Database Target
-**Endpoint:** `POST /storage/targets/test`
 **Request Body:**
+```json
+{
+  "conn": "postgresql://postgres@newhost/neuract",
+  "status": "ok"
+}
+```
+
+### DELETE /storage/targets/{tid}
+
+Delete a database target. Fails if it's the default or in use (unless `force=true`).
+
+**Query Parameters:** `force` (boolean, optional)
+
+### POST /storage/targets/test
+
+Test database connectivity.
+
+**Request Body:**
+```json
+{
+  "provider": "postgres",
+  "conn": "postgresql://postgres@localhost/neuract"
+}
+```
+
+Or by ID:
 ```json
 {
   "id": "target_1"
 }
 ```
-Or provide inline target:
-```json
-{
-  "provider": "sqlite",
-  "conn": "/data/test.db"
-}
-```
+
 **Response:**
 ```json
 {
@@ -1428,14 +1720,17 @@ Or provide inline target:
 }
 ```
 
-### Set Default Database Target
-**Endpoint:** `POST /storage/targets/default`
+### POST /storage/targets/default
+
+Set the default database target.
+
 **Request Body:**
 ```json
 {
   "id": "target_1"
 }
 ```
+
 **Response:**
 ```json
 {
@@ -1444,14 +1739,18 @@ Or provide inline target:
 }
 ```
 
-### Create Database
-**Endpoint:** `POST /storage/targets/create_db`
+### POST /storage/targets/create_db
+
+Create or verify a database file (SQLite only).
+
 **Request Body:**
 ```json
 {
-  "id": "target_1"
+  "provider": "sqlite",
+  "conn": "/data/myapp.db"
 }
 ```
+
 **Response:**
 ```json
 {
@@ -1462,14 +1761,16 @@ Or provide inline target:
 
 ---
 
-## 13. System Metrics & Monitoring
+## 13. System Metrics
 
-**Prefix:** `/system`
-**Authentication:** Protected
+Prefix: `/system`
 
-### Get System Metrics
-**Endpoint:** `GET /system/metrics`
-**Query Parameters:** `range` (optional, e.g., "5m", "1h", "300" for seconds)
+### GET /system/metrics
+
+System resource metrics over a time range.
+
+**Query Parameters:** `range` (optional, e.g. `"300"`, `"5m"`, `"1h"` — default 300 seconds)
+
 **Response:**
 ```json
 {
@@ -1477,14 +1778,19 @@ Or provide inline target:
   "data": {
     "timeseries": [
       {
-        "timestamp": "2024-02-13T10:30:00Z",
+        "ts": 1707815400,
         "cpu": 45.2,
-        "memory": 2048,
-        "disk": 15360,
-        "network": 1024
+        "mem": 2048,
+        "disk_rps": 100,
+        "disk_wps": 50,
+        "net_rxps": 1024,
+        "net_txps": 512,
+        "proc_cpu": 12.5,
+        "proc_rss_mb": 128,
+        "proc_handles": 45
       }
     ],
-    "now": "2024-02-13T10:35:00Z",
+    "now": "2025-01-15T10:35:00Z",
     "devices": {
       "connected": 5,
       "disconnected": 1,
@@ -1495,8 +1801,10 @@ Or provide inline target:
 }
 ```
 
-### Get System Summary
-**Endpoint:** `GET /system/summary`
+### GET /system/summary
+
+Compact status summary (for system tray).
+
 **Response:**
 ```json
 {
@@ -1511,14 +1819,18 @@ Or provide inline target:
 
 ## 14. Database Metrics
 
-**Prefix:** `/db`
-**Authentication:** Protected
+Prefix: `/db`
 
-### Get Database Metrics
-**Endpoint:** `GET /db/metrics`
+### GET /db/metrics
+
+Database write performance metrics.
+
 **Query Parameters:**
-- `target_id` (optional): Specific database target
-- `range` (optional): Time range
+
+| Param | Type | Description |
+|-------|------|-------------|
+| target_id | string | Specific DB target (uses default if omitted) |
+| range | string | Time range (e.g. `"300s"`) |
 
 **Response:**
 ```json
@@ -1539,56 +1851,48 @@ Or provide inline target:
 
 ## 15. Reports
 
-**Prefix:** `/reports`
-**Authentication:** Protected
+Prefix: `/reports`
 
-### Export Job Runs as CSV
-**Endpoint:** `GET /reports/runs.csv`
+### GET /reports/runs.csv
+
+Export job run history as CSV.
+
 **Query Parameters:**
-- `job_id` (optional): Specific job
-- `frm` (optional): Start date
-- `to` (optional): End date
 
-**Response:** CSV file with columns:
+| Param | Type | Description |
+|-------|------|-------------|
+| job_id | string | Filter by job (all if omitted) |
+| frm | string | Start date |
+| to | string | End date |
+
+**Response:** `text/csv`
 ```
 id,job_id,started_at,stopped_at,duration_ms,rows,read_lat_avg,write_lat_avg,error_pct
 ```
 
-### Export Errors as CSV
-**Endpoint:** `GET /reports/errors.csv`
+### GET /reports/errors.csv
+
+Export aggregated errors as CSV.
+
 **Query Parameters:** `job_id` (optional)
-**Response:** CSV file with columns:
+
+**Response:** `text/csv`
 ```
 job_id,code,count,last_message,last_ts
 ```
 
 ---
 
-## 16. Debug Endpoints
+## 16. Notifications
 
-**Prefix:** `/debug`
-**Authentication:** Protected
+Prefix: `/auth`
 
-### Echo Request
-**Endpoint:** `POST /debug/echo`
-**Response:**
-```json
-{
-  "ok": true,
-  "headers": { /* request headers */ },
-  "bodyPrefix": "First 512 bytes of body..."
-}
-```
+### POST /auth/notifications
 
----
+Create a notification and broadcast via Redis pub/sub.
 
-## 17. Notifications (REST)
+**Status Code:** 201
 
-**Prefix:** `/auth/notifications`
-**Authentication:** Protected (requires `logger-read` role)
-
-### Create Notification
-**Endpoint:** `POST /auth/notifications`
 **Request Body:**
 ```json
 {
@@ -1596,481 +1900,290 @@ job_id,code,count,last_message,last_ts
   "type": "job"
 }
 ```
-**Valid Types:** job, alert, info, warning, error
 
-**Response:**
+| Field | Type | Required | Default |
+|-------|------|----------|---------|
+| message | string | Yes | — |
+| type | string | No | `"job"` |
+
+**Valid Types:** `job`, `alert`, `info`, `warning`, `error`
+
+**Response (201):**
 ```json
 {
   "ok": true,
-  "id": "notif_uuid",
+  "id": "a1b2c3d4-...",
   "type": "job",
   "message": "Job completed successfully",
-  "user": "user_uuid",
+  "user": "aed23084-...",
   "read": false,
-  "time": "2024-02-13T10:30:00Z"
+  "time": "2025-01-15T10:30:00Z"
 }
 ```
 
-### List Notifications
-**Endpoint:** `GET /auth/notifications/list`
+### GET /auth/notifications/list
+
+List notifications for the current user.
+
 **Response:**
 ```json
-{
-  "notifications": [
-    {
-      "id": "notif_uuid",
-      "type": "job",
-      "message": "...",
-      "user": "user_uuid",
-      "read": false,
-      "time": "2024-02-13T10:30:00Z"
-    }
-  ]
-}
+[
+  {
+    "id": "a1b2c3d4-...",
+    "type": "job",
+    "message": "Job job_1773669704217 was started by rohith",
+    "user": "aed23084-...",
+    "read": false,
+    "time": "2025-01-15T10:30:00Z"
+  }
+]
 ```
+
+### Background Notification: Job Start
+
+When a job is started via `POST /jobs2/{job_id}/start`, the system automatically:
+
+1. Queries Keycloak for all users with the `logger_read` realm role
+2. Creates a notification for each user: `"Job {job_id} was started by {username}"`
+3. Broadcasts each notification to the `logger_read` Redis pub/sub channel
+4. WebSocket clients subscribed to `/ws/logs` receive the notification in real-time
+
+This runs as a FastAPI background task and does not block the start response.
 
 ---
 
-## 18. WebSocket Endpoints
+## 17. WebSocket — Real-time Notifications
 
-### Real-time Notification Stream
-**Endpoint:** `WebSocket /ws/logs`
-**Authentication:** JWT token required (via Authorization header or `?token=` query param)
-**Requirements:** `logger-read` role
+### WS /ws/logs
 
-**Connection Protocol:**
-1. Connect with Authorization header or token query parameter:
-   ```
-   ws://127.0.0.1:5175/ws/logs?token=YOUR_JWT_TOKEN
-   ```
-   Or with header:
-   ```javascript
-   const ws = new WebSocket('ws://127.0.0.1:5175/ws/logs', {
-     headers: { 'Authorization': 'Bearer YOUR_JWT_TOKEN' }
-   });
-   ```
+Real-time notification stream via WebSocket. Subscribes to Redis pub/sub channel `logger_read` and forwards all messages to connected clients.
 
-2. Server accepts connection if JWT is valid
-3. Server subscribes to Redis `logger_read` channel
-4. Receive JSON messages for each notification
+**Authentication:** JWT required via `Authorization` header or `?token=` query parameter. Requires `logger-read` role.
 
-**Message Format:**
+**Connection:**
+```
+ws://127.0.0.1:5175/ws/logs?token=YOUR_JWT_TOKEN
+```
+
+Or with header:
+```javascript
+const ws = new WebSocket('ws://127.0.0.1:5175/ws/logs', {
+  headers: { 'Authorization': 'Bearer YOUR_JWT_TOKEN' }
+});
+```
+
+**Incoming Message Format:**
 ```json
 {
   "type": "job",
   "action": "create",
-  "notification_id": "notif_uuid",
-  "message": "Job completed",
-  "user": "user_uuid",
+  "notification_id": "a1b2c3d4-...",
+  "message": "Job job_1773669704217 was started by rohith",
+  "user": "aed23084-...",
   "read": false,
-  "time": "2024-02-13T10:30:00Z"
+  "time": "2025-01-15T10:30:00Z"
 }
 ```
 
 **Close Codes:**
-- 1000: Normal closure
-- 1008: Policy violation (authentication failed)
-- 1011: Server error (e.g., Redis unavailable)
+| Code | Meaning |
+|------|---------|
+| 1000 | Normal closure |
+| 1008 | Authentication failed |
+| 1011 | Server error (e.g. Redis unavailable) |
 
 **JavaScript Example:**
 ```javascript
 const token = 'YOUR_JWT_TOKEN';
 const ws = new WebSocket(`ws://127.0.0.1:5175/ws/logs?token=${token}`);
 
-ws.onopen = () => {
-  console.log('Connected to notification stream');
-};
+ws.onopen = () => console.log('Connected');
 
 ws.onmessage = (event) => {
   const notification = JSON.parse(event.data);
-  console.log('New notification:', notification);
+  console.log('Notification:', notification);
 };
 
-ws.onerror = (error) => {
-  console.error('WebSocket error:', error);
-};
+ws.onerror = (error) => console.error('Error:', error);
 
-ws.onclose = (event) => {
-  console.log('Connection closed:', event.code, event.reason);
-};
+ws.onclose = (event) => console.log('Closed:', event.code, event.reason);
 ```
 
 ---
 
-## Authentication & Authorization
+## 18. Debug
 
-### Access Control
+Prefix: `/debug`
 
-**Public Endpoints** (no authentication required):
-- `/health`
-- `/version`
-- `/shutdown`
-- `/auth/*` (register, login, assign-role)
-- `/schemas*`
-- `/tables*`
-- `/devices*`
-- `/protocol_types*`
-- `/bulk_import*`
-- `/jobs2*` (legacy unprotected)
+### POST /debug/echo
 
-**Protected Endpoints** (require valid Keycloak JWT):
-- `/jobs*` (requires admin role for write operations)
-- `/networking*`
-- `/storage*`
-- `/mappings*`
-- `/system*`
-- `/db*`
-- `/reports*`
-- `/debug*`
-- `/auth/notifications*` (requires `logger-read` role)
-- `/ws/logs` (WebSocket, requires `logger-read` role)
+Echo request headers and body prefix (for debugging).
 
-### JWT Token Format
+**Request Body:** Any JSON
 
-Tokens are obtained via `/auth/login` and must be included in subsequent requests:
-```
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-```
-
-### Token Refresh
-
-Use the refresh token from login response to get a new access token when expired.
-
----
-
-## Error Handling
-
-### Standard Error Response
+**Response:**
 ```json
 {
-  "detail": "ERROR_CODE_OR_MESSAGE"
+  "ok": true,
+  "headers": { "content-type": "application/json", "host": "127.0.0.1:5175" },
+  "bodyPrefix": "First 512 bytes of request body..."
 }
 ```
 
-### Common HTTP Status Codes
-- `200 OK`: Success
-- `201 Created`: Resource created
-- `400 Bad Request`: Invalid input
-- `401 Unauthorized`: Missing/invalid authentication
-- `403 Forbidden`: Insufficient permissions
-- `404 Not Found`: Resource not found
-- `422 Unprocessable Entity`: Validation error
-- `429 Too Many Requests`: Rate limited
-- `500 Internal Server Error`: Server error
-- `502 Bad Gateway`: External service error
+---
 
-### Common Error Codes
+## 19. Authentication & Authorization
 
-**Device Errors:**
-- `NAME_REQUIRED`: Device name missing
-- `PROTOCOL_INVALID`: Invalid protocol type
-- `GATEWAY_NOT_FOUND`: Referenced gateway doesn't exist
-- `DEVICE_NOT_FOUND`: Device ID not found
+### JWT Token Flow
 
-**Gateway Errors:**
-- `NAME_AND_HOST_REQUIRED`: Gateway name or host missing
-- `PROTOCOL_HINT_INVALID`: Invalid protocol hint
-- `INVALID_PORTS`: Port validation failed
+1. Login via `POST /auth/login` to get `access_token` and `refresh_token`
+2. Include token in requests: `Authorization: Bearer <access_token>`
+3. Token expires in 300 seconds (5 minutes) — use refresh token to renew
 
-**Mapping Errors:**
-- `DEVICE_NOT_BOUND`: Table not linked to device
-- `MAPPING_INCOMPLETE`: Required fields not mapped
-- `TAG_UNREADABLE`: Cannot read from device address
+### Role-Based Access
 
-**Job Errors:**
-- `JOB_NOT_FOUND`: Job ID not found
-- `NO_TABLES`: No tables specified for job
-- `NO_MAPPED_COLUMNS`: Table has no mapped fields
+| Role | Scope |
+|------|-------|
+| `logger_read` | Read access, WebSocket notifications |
+| `logger_write` | Write operations (create, update, start/stop) |
+| `logger_delete` | Delete operations |
 
-**Protocol Errors:**
-- `PROTOCOL_IN_USE`: Cannot delete protocol (devices using it)
-- `MODBUS_HOST_MISSING`: Modbus connection requires host
-- `OPCUA_PKG_MISSING`: OPC UA library not installed
+### Protected Endpoints Summary
+
+The following endpoints require a valid JWT with the `logger_write` role:
+
+| Endpoint | Method |
+|----------|--------|
+| `/schemas` | POST |
+| `/schemas/import` | POST |
+| `/tables/bulk_create` | POST |
+| `/tables/bulk_update_target` | POST |
+| `/tables/dry_run_ddl` | POST |
+| `/tables/migrate` | POST |
+| `/devices` | POST |
+| `/devices/{id}` | PUT |
+| `/devices/{id}/connect` | POST |
+| `/devices/{id}/disconnect` | POST |
+| `/devices/{id}/quick_test` | POST |
+| `/jobs2` | POST |
+| `/jobs2/{id}/start` | POST |
+| `/jobs2/{id}/pause` | POST |
+| `/jobs2/{id}/stop` | POST |
+| `/jobs2/stop_all` | POST |
+| `/jobs2/{id}/dry_run` | POST |
+| `/jobs2/{id}/backfill` | POST |
+
+### Error Responses
+
+**401 Unauthorized** — Missing or invalid token:
+```json
+{
+  "detail": {
+    "success": false,
+    "error": "INVALID_TOKEN",
+    "message": "Token validation failed"
+  }
+}
+```
+
+**403 Forbidden** — Insufficient role:
+```json
+{
+  "detail": {
+    "success": false,
+    "error": "INSUFFICIENT_ROLE",
+    "message": "logger-write role required"
+  }
+}
+```
 
 ---
 
-## Supported Protocols
+## 20. Error Codes
+
+### HTTP Status Codes
+
+| Code | Meaning |
+|------|---------|
+| 200 | Success |
+| 201 | Created |
+| 400 | Bad request / validation error |
+| 401 | Unauthorized (missing/invalid JWT) |
+| 403 | Forbidden (insufficient role) |
+| 404 | Not found |
+| 429 | Rate limited |
+| 500 | Server error |
+| 502 | Bad gateway (Keycloak unavailable) |
+
+### Application Error Codes
+
+**Devices:**
+`NAME_REQUIRED`, `PROTOCOL_INVALID`, `GATEWAY_NOT_FOUND`, `DEVICE_NOT_FOUND`
+
+**Gateways:**
+`NAME_AND_HOST_REQUIRED`, `PROTOCOL_HINT_INVALID`, `INVALID_PORTS`
+
+**Mappings:**
+`DEVICE_NOT_BOUND`, `MAPPING_INCOMPLETE`, `MAPPING_TYPE_MISMATCH`, `TAG_UNREADABLE`
+
+**Jobs:**
+`JOB_NOT_FOUND`, `NO_TABLES`, `NO_MAPPED_COLUMNS`, `JOB_DELETE_FAILED`, `NO_JOB_IDS`
+
+**Protocols:**
+`PROTOCOL_IN_USE`, `PROTOCOL_NOT_SUPPORTED`, `MODBUS_HOST_MISSING`, `OPCUA_PKG_MISSING`
+
+---
+
+## 21. Supported Protocols
 
 ### Modbus TCP
 
-**Features:**
-- Holding registers read/write
-- Multiple encodings: float32, float64, int16, int32, uint16, uint32, int64, uint64
-- Unit ID support (slave addressing)
-- Scaling and offset transformations
-- Register address mapping
-
-**Configuration:**
-- Host: IP address from gateway
-- Port: Port number from device (default: 502)
-- Unit ID: Device-level configuration (default: 1)
-
-**Mapping Fields:**
-- `protocol`: "modbus"
-- `address`: Register number (e.g., "40001")
-- `encoding`: Data type (e.g., "float32")
-- `scale`: Multiplication factor
-- `deadband`: Change threshold for triggers
+| Field | Description |
+|-------|-------------|
+| host | IP from gateway |
+| port | Default 502 |
+| unitId | Slave address (1-247) |
+| address | Register number (e.g. `"40001"`) |
+| encoding | `float32`, `float64`, `int16`, `int32`, `uint16`, `uint32`, `int64`, `uint64` |
+| scale | Multiplication factor |
+| deadband | Change threshold for triggers |
 
 ### OPC UA
 
-**Features:**
-- Node browsing and discovery
-- Value subscription and reading
-- Endpoint URL configuration
-- Node ID addressing
-
-**Configuration:**
-- Endpoint: Full OPC UA URL from gateway.host (e.g., "opc.tcp://192.168.1.20:4840/server")
-
-**Mapping Fields:**
-- `protocol`: "opcua"
-- `address`: Node ID (e.g., "ns=2;i=1001")
-- `scale`: Multiplication factor
-- `deadband`: Change threshold for triggers
+| Field | Description |
+|-------|-------------|
+| endpoint | Full URL (e.g. `opc.tcp://192.168.1.20:4840/server`) |
+| nodeId | Node address (e.g. `ns=2;i=1001`) |
+| scale | Multiplication factor |
+| deadband | Change threshold for triggers |
 
 ---
 
-## Database Targets
+## 22. Database Providers
 
-### Supported Providers
-
-#### 1. SQLite (default)
-**Connection String:**
-```
-/path/to/database.db
-```
-**Schema:** Tables prefixed with `neuract__`
-**Example:**
-```json
-{
-  "provider": "sqlite",
-  "conn": "/data/sensors.db"
-}
-```
-
-#### 2. PostgreSQL
-**Connection String:**
-```
-postgresql://user:password@host:5432/database
-```
-**Schema:** Tables in `neuract` schema
-**Example:**
-```json
-{
-  "provider": "postgresql",
-  "conn": "postgresql://postgres:password@localhost:5432/neuract"
-}
-```
-
-#### 3. Microsoft SQL Server
-**Connection String:**
-```
-mssql+pyodbc://user:password@host/database?driver=ODBC+Driver+17+for+SQL+Server
-```
-**Schema:** Tables in `neuract` schema
-**Example:**
-```json
-{
-  "provider": "sqlserver",
-  "conn": "mssql+pyodbc://sa:password@localhost/neuract?driver=ODBC+Driver+17+for+SQL+Server"
-}
-```
-
-#### 4. MySQL
-**Connection String:**
-```
-mysql+pymysql://user:password@host:3306/database
-```
-**Schema:** Tables prefixed with `neuract__`
-**Example:**
-```json
-{
-  "provider": "mysql",
-  "conn": "mysql+pymysql://root:password@localhost:3306/neuract"
-}
-```
+| Provider | Connection String Format | Schema Strategy |
+|----------|-------------------------|-----------------|
+| `sqlite` | `/path/to/database.db` | Tables prefixed `neuract__` |
+| `postgres` | `postgresql://user:pass@host:5432/db` | Tables in `neuract` schema |
+| `sqlserver` | `mssql+pyodbc://user:pass@host/db?driver=...` | Tables in `neuract` schema |
+| `mysql` | `mysql+pymysql://user:pass@host:3306/db` | Tables prefixed `neuract__` |
 
 ---
 
-## Configuration via Environment Variables
+## 23. Environment Variables
 
-### Required
-- `APP_DB_URL`: PostgreSQL connection for metadata storage
-  ```bash
-  APP_DB_URL=postgresql://postgres@localhost/meta_data_fast
-  ```
-
-### Optional
-- `CORS_ORIGIN`: CORS origin (default: http://127.0.0.1:5173)
-- `AGENT_PORT`: Server port (default: 5175)
-- `AGENT_LOG_LEVEL`: Logging level (default: INFO)
-- `REDIS_URL`: Redis for pub/sub (default: redis://127.0.0.1:6379/3)
-
----
-
-## Running the Server
-
-### Start Command
-```bash
-cd /home/rohith/desktop/LoggerFast/agent
-APP_DB_URL=postgresql://postgres@localhost/meta_data_fast python run_agent.py
-```
-
-### Or with uvicorn directly
-```bash
-cd /home/rohith/desktop/LoggerFast/agent
-APP_DB_URL=postgresql://postgres@localhost/meta_data_fast \
-uvicorn plc_agent.api.app:app --host 127.0.0.1 --port 5175 --reload
-```
-
-### With .env file
-Create `/home/rohith/desktop/LoggerFast/agent/.env`:
-```bash
-APP_DB_URL=postgresql://postgres@localhost/meta_data_fast
-CORS_ORIGIN=http://127.0.0.1:5173
-AGENT_PORT=5175
-REDIS_URL=redis://127.0.0.1:6379/3
-```
-
-Then run:
-```bash
-cd /home/rohith/desktop/LoggerFast/agent
-python run_agent.py
-```
-
----
-
-## Quick Start Examples
-
-### 1. Create Complete Data Collection Pipeline
-
-```bash
-# 1. Import devices from spreadsheet
-curl -X POST http://127.0.0.1:5175/bulk_import/devices \
-  -H "Content-Type: application/json" \
-  -d '{
-    "devices": [
-      {
-        "name": "Temperature Sensor",
-        "ip": "192.168.1.100",
-        "port": 502,
-        "protocol": "modbus",
-        "unit": 1
-      }
-    ]
-  }'
-
-# 2. Create schema
-curl -X POST http://127.0.0.1:5175/schemas \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "temp_schema",
-    "name": "Temperature Schema",
-    "fields": [
-      {"key": "temperature", "type": "float", "unit": "°C"}
-    ]
-  }'
-
-# 3. Create table
-curl -X POST http://127.0.0.1:5175/tables/bulk_create \
-  -H "Content-Type: application/json" \
-  -d '{
-    "parentSchemaId": "temp_schema",
-    "names": ["sensor_data"]
-  }'
-
-# 4. Migrate table to database
-curl -X POST http://127.0.0.1:5175/tables/migrate \
-  -H "Content-Type: application/json" \
-  -d '{"ids": ["table_id_from_step_3"]}'
-
-# 5. Create mapping
-curl -X POST http://127.0.0.1:5175/mappings/table_id_from_step_3 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "deviceId": "device_id_from_step_1",
-    "rows": {
-      "temperature": {
-        "protocol": "modbus",
-        "address": "100",
-        "encoding": "float32",
-        "scale": 0.1
-      }
-    }
-  }'
-
-# 6. Create and start job
-curl -X POST http://127.0.0.1:5175/jobs \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Temperature Logger",
-    "tables": ["table_id_from_step_3"],
-    "intervalMs": 5000,
-    "enabled": true
-  }'
-
-curl -X POST http://127.0.0.1:5175/jobs/job_id_from_above/start \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
-```
-
-### 2. Monitor Job Performance
-
-```bash
-# Get real-time metrics
-curl http://127.0.0.1:5175/jobs/job_id/metrics?range=5m \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
-
-# Get job runs history
-curl http://127.0.0.1:5175/jobs/job_id/runs \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
-
-# Export runs to CSV
-curl http://127.0.0.1:5175/reports/runs.csv?job_id=job_id \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
-  -o runs.csv
-```
-
-### 3. Test Device Connectivity
-
-```bash
-# Modbus test
-curl -X POST http://127.0.0.1:5175/networking/modbus/test \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "host": "192.168.1.100",
-    "port": 502,
-    "unitId": 1,
-    "address": 0,
-    "count": 10
-  }'
-
-# OPC UA test
-curl -X POST http://127.0.0.1:5175/networking/opcua/test \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "endpoint": "opc.tcp://192.168.1.100:4840/server",
-    "nodeId": "ns=2;i=2"
-  }'
-```
-
----
-
-## Version History
-
-- **1.0.0** - Initial release with Modbus and OPC UA support
-- Gateway-based architecture
-- Bulk device import
-- Protocol type management
-- Real-time WebSocket notifications
-
----
-
-## Support & Contributing
-
-For issues and feature requests, contact the development team.
-
-**Documentation Last Updated:** February 13, 2024
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENT_PORT` | `5175` | Server port |
+| `AGENT_HOST` | `127.0.0.1` | Bind host |
+| `APP_DB_URL` | — | PostgreSQL URL for metadata storage |
+| `META_BREAKPOINT_DB_URL` | — | PostgreSQL URL for breakpoint metadata |
+| `CORS_ORIGIN` | `http://127.0.0.1:5173` | CORS allowed origin |
+| `AGENT_LOG_LEVEL` | `INFO` | Logging level |
+| `REDIS_URL` | `redis://127.0.0.1:6379/3` | Redis for WebSocket pub/sub |
+| `KC_URL` | `http://192.168.1.20:8080/keycloak` | Keycloak base URL |
+| `KC_REALM` | `desktop` | Keycloak realm |
+| `KC_ALLOWED_ISSUERS` | — | Comma-separated list of allowed JWT issuers |
+| `KC_ADMIN_CLIENT_ID` | `neuract_owner` | Keycloak service account client |
+| `KC_ADMIN_CLIENT_SECRET` | — | Keycloak service account secret |
+| `AGENT_STRICT_PORT` | `0` | If `1`, exit if preferred port is busy |

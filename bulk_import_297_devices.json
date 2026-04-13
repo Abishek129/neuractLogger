@@ -1,0 +1,2252 @@
+{
+  "devices": [
+    {
+      "name": "mfm_001",
+      "ip": "10.10.1.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-01"
+    },
+    {
+      "name": "mfm_002",
+      "ip": "10.10.1.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-01"
+    },
+    {
+      "name": "mfm_003",
+      "ip": "10.10.1.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-01"
+    },
+    {
+      "name": "mfm_004",
+      "ip": "10.10.1.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-01"
+    },
+    {
+      "name": "mfm_005",
+      "ip": "10.10.1.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-01"
+    },
+    {
+      "name": "mfm_006",
+      "ip": "10.10.1.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-01"
+    },
+    {
+      "name": "mfm_007",
+      "ip": "10.10.1.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-01"
+    },
+    {
+      "name": "mfm_008",
+      "ip": "10.10.1.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-01"
+    },
+    {
+      "name": "mfm_009",
+      "ip": "10.10.1.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-01"
+    },
+    {
+      "name": "mfm_010",
+      "ip": "10.10.1.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-01"
+    },
+    {
+      "name": "mfm_011",
+      "ip": "10.10.2.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-02"
+    },
+    {
+      "name": "mfm_012",
+      "ip": "10.10.2.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-02"
+    },
+    {
+      "name": "mfm_013",
+      "ip": "10.10.2.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-02"
+    },
+    {
+      "name": "mfm_014",
+      "ip": "10.10.2.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-02"
+    },
+    {
+      "name": "mfm_015",
+      "ip": "10.10.2.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-02"
+    },
+    {
+      "name": "mfm_016",
+      "ip": "10.10.2.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-02"
+    },
+    {
+      "name": "mfm_017",
+      "ip": "10.10.2.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-02"
+    },
+    {
+      "name": "mfm_018",
+      "ip": "10.10.2.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-02"
+    },
+    {
+      "name": "mfm_019",
+      "ip": "10.10.2.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-02"
+    },
+    {
+      "name": "mfm_020",
+      "ip": "10.10.2.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-02"
+    },
+    {
+      "name": "mfm_021",
+      "ip": "10.10.3.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-03"
+    },
+    {
+      "name": "mfm_022",
+      "ip": "10.10.3.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-03"
+    },
+    {
+      "name": "mfm_023",
+      "ip": "10.10.3.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-03"
+    },
+    {
+      "name": "mfm_024",
+      "ip": "10.10.3.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-03"
+    },
+    {
+      "name": "mfm_025",
+      "ip": "10.10.3.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-03"
+    },
+    {
+      "name": "mfm_026",
+      "ip": "10.10.3.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-03"
+    },
+    {
+      "name": "mfm_027",
+      "ip": "10.10.3.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-03"
+    },
+    {
+      "name": "mfm_028",
+      "ip": "10.10.3.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-03"
+    },
+    {
+      "name": "mfm_029",
+      "ip": "10.10.3.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-03"
+    },
+    {
+      "name": "mfm_030",
+      "ip": "10.10.3.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-03"
+    },
+    {
+      "name": "mfm_031",
+      "ip": "10.10.3.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 11,
+      "connections": "GIC-03"
+    },
+    {
+      "name": "mfm_032",
+      "ip": "10.10.4.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-04"
+    },
+    {
+      "name": "mfm_033",
+      "ip": "10.10.4.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-04"
+    },
+    {
+      "name": "mfm_034",
+      "ip": "10.10.4.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-04"
+    },
+    {
+      "name": "mfm_035",
+      "ip": "10.10.4.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-04"
+    },
+    {
+      "name": "mfm_036",
+      "ip": "10.10.4.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-04"
+    },
+    {
+      "name": "mfm_037",
+      "ip": "10.10.4.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-04"
+    },
+    {
+      "name": "mfm_038",
+      "ip": "10.10.4.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-04"
+    },
+    {
+      "name": "mfm_039",
+      "ip": "10.10.4.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-04"
+    },
+    {
+      "name": "mfm_040",
+      "ip": "10.10.4.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-04"
+    },
+    {
+      "name": "mfm_041",
+      "ip": "10.10.4.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-04"
+    },
+    {
+      "name": "mfm_042",
+      "ip": "10.10.5.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-05"
+    },
+    {
+      "name": "mfm_043",
+      "ip": "10.10.5.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-05"
+    },
+    {
+      "name": "mfm_044",
+      "ip": "10.10.5.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-05"
+    },
+    {
+      "name": "mfm_045",
+      "ip": "10.10.5.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-05"
+    },
+    {
+      "name": "mfm_046",
+      "ip": "10.10.5.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-05"
+    },
+    {
+      "name": "mfm_047",
+      "ip": "10.10.5.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-05"
+    },
+    {
+      "name": "mfm_048",
+      "ip": "10.10.5.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-05"
+    },
+    {
+      "name": "mfm_049",
+      "ip": "10.10.5.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-05"
+    },
+    {
+      "name": "mfm_050",
+      "ip": "10.10.5.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-05"
+    },
+    {
+      "name": "mfm_051",
+      "ip": "10.10.5.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-05"
+    },
+    {
+      "name": "mfm_052",
+      "ip": "10.10.6.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-06"
+    },
+    {
+      "name": "mfm_053",
+      "ip": "10.10.6.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-06"
+    },
+    {
+      "name": "mfm_054",
+      "ip": "10.10.6.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-06"
+    },
+    {
+      "name": "mfm_055",
+      "ip": "10.10.6.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-06"
+    },
+    {
+      "name": "mfm_056",
+      "ip": "10.10.6.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-06"
+    },
+    {
+      "name": "mfm_057",
+      "ip": "10.10.6.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-06"
+    },
+    {
+      "name": "mfm_058",
+      "ip": "10.10.6.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-06"
+    },
+    {
+      "name": "mfm_059",
+      "ip": "10.10.6.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-06"
+    },
+    {
+      "name": "mfm_060",
+      "ip": "10.10.6.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-06"
+    },
+    {
+      "name": "mfm_061",
+      "ip": "10.10.6.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-06"
+    },
+    {
+      "name": "mfm_062",
+      "ip": "10.10.7.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-07"
+    },
+    {
+      "name": "mfm_063",
+      "ip": "10.10.7.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-07"
+    },
+    {
+      "name": "mfm_064",
+      "ip": "10.10.7.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-07"
+    },
+    {
+      "name": "mfm_065",
+      "ip": "10.10.7.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-07"
+    },
+    {
+      "name": "mfm_066",
+      "ip": "10.10.7.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-07"
+    },
+    {
+      "name": "mfm_067",
+      "ip": "10.10.7.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-07"
+    },
+    {
+      "name": "mfm_068",
+      "ip": "10.10.7.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-07"
+    },
+    {
+      "name": "mfm_069",
+      "ip": "10.10.7.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-07"
+    },
+    {
+      "name": "mfm_070",
+      "ip": "10.10.7.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-07"
+    },
+    {
+      "name": "mfm_071",
+      "ip": "10.10.7.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-07"
+    },
+    {
+      "name": "mfm_072",
+      "ip": "10.10.7.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 11,
+      "connections": "GIC-07"
+    },
+    {
+      "name": "mfm_073",
+      "ip": "10.10.8.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-08"
+    },
+    {
+      "name": "mfm_074",
+      "ip": "10.10.8.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-08"
+    },
+    {
+      "name": "mfm_075",
+      "ip": "10.10.8.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-08"
+    },
+    {
+      "name": "mfm_076",
+      "ip": "10.10.8.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-08"
+    },
+    {
+      "name": "mfm_077",
+      "ip": "10.10.8.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-08"
+    },
+    {
+      "name": "mfm_078",
+      "ip": "10.10.8.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-08"
+    },
+    {
+      "name": "mfm_079",
+      "ip": "10.10.8.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-08"
+    },
+    {
+      "name": "mfm_080",
+      "ip": "10.10.8.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-08"
+    },
+    {
+      "name": "mfm_081",
+      "ip": "10.10.8.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-08"
+    },
+    {
+      "name": "mfm_082",
+      "ip": "10.10.8.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-08"
+    },
+    {
+      "name": "mfm_083",
+      "ip": "10.10.8.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 11,
+      "connections": "GIC-08"
+    },
+    {
+      "name": "mfm_084",
+      "ip": "10.10.9.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-09"
+    },
+    {
+      "name": "mfm_085",
+      "ip": "10.10.9.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-09"
+    },
+    {
+      "name": "mfm_086",
+      "ip": "10.10.9.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-09"
+    },
+    {
+      "name": "mfm_087",
+      "ip": "10.10.9.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-09"
+    },
+    {
+      "name": "mfm_088",
+      "ip": "10.10.9.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-09"
+    },
+    {
+      "name": "mfm_089",
+      "ip": "10.10.9.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-09"
+    },
+    {
+      "name": "mfm_090",
+      "ip": "10.10.9.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-09"
+    },
+    {
+      "name": "mfm_091",
+      "ip": "10.10.9.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-09"
+    },
+    {
+      "name": "mfm_092",
+      "ip": "10.10.9.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-09"
+    },
+    {
+      "name": "mfm_093",
+      "ip": "10.10.9.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-09"
+    },
+    {
+      "name": "mfm_094",
+      "ip": "10.10.9.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 11,
+      "connections": "GIC-09"
+    },
+    {
+      "name": "mfm_095",
+      "ip": "10.10.9.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 12,
+      "connections": "GIC-09"
+    },
+    {
+      "name": "mfm_096",
+      "ip": "10.10.10.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-10"
+    },
+    {
+      "name": "mfm_097",
+      "ip": "10.10.10.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-10"
+    },
+    {
+      "name": "mfm_098",
+      "ip": "10.10.10.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-10"
+    },
+    {
+      "name": "mfm_099",
+      "ip": "10.10.10.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-10"
+    },
+    {
+      "name": "mfm_100",
+      "ip": "10.10.10.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-10"
+    },
+    {
+      "name": "mfm_101",
+      "ip": "10.10.10.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-10"
+    },
+    {
+      "name": "mfm_102",
+      "ip": "10.10.10.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-10"
+    },
+    {
+      "name": "mfm_103",
+      "ip": "10.10.10.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-10"
+    },
+    {
+      "name": "mfm_104",
+      "ip": "10.10.10.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-10"
+    },
+    {
+      "name": "mfm_105",
+      "ip": "10.10.10.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-10"
+    },
+    {
+      "name": "mfm_106",
+      "ip": "10.10.10.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 11,
+      "connections": "GIC-10"
+    },
+    {
+      "name": "mfm_107",
+      "ip": "10.10.10.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 12,
+      "connections": "GIC-10"
+    },
+    {
+      "name": "mfm_108",
+      "ip": "10.10.10.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 13,
+      "connections": "GIC-10"
+    },
+    {
+      "name": "mfm_109",
+      "ip": "10.10.11.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-11"
+    },
+    {
+      "name": "mfm_110",
+      "ip": "10.10.11.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-11"
+    },
+    {
+      "name": "mfm_111",
+      "ip": "10.10.11.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-11"
+    },
+    {
+      "name": "mfm_112",
+      "ip": "10.10.11.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-11"
+    },
+    {
+      "name": "mfm_113",
+      "ip": "10.10.11.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-11"
+    },
+    {
+      "name": "mfm_114",
+      "ip": "10.10.11.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-11"
+    },
+    {
+      "name": "mfm_115",
+      "ip": "10.10.11.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-11"
+    },
+    {
+      "name": "mfm_116",
+      "ip": "10.10.11.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-11"
+    },
+    {
+      "name": "mfm_117",
+      "ip": "10.10.11.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-11"
+    },
+    {
+      "name": "mfm_118",
+      "ip": "10.10.11.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-11"
+    },
+    {
+      "name": "mfm_119",
+      "ip": "10.10.12.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-12"
+    },
+    {
+      "name": "mfm_120",
+      "ip": "10.10.12.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-12"
+    },
+    {
+      "name": "mfm_121",
+      "ip": "10.10.12.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-12"
+    },
+    {
+      "name": "mfm_122",
+      "ip": "10.10.12.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-12"
+    },
+    {
+      "name": "mfm_123",
+      "ip": "10.10.12.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-12"
+    },
+    {
+      "name": "mfm_124",
+      "ip": "10.10.12.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-12"
+    },
+    {
+      "name": "mfm_125",
+      "ip": "10.10.12.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-12"
+    },
+    {
+      "name": "mfm_126",
+      "ip": "10.10.12.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-12"
+    },
+    {
+      "name": "mfm_127",
+      "ip": "10.10.12.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-12"
+    },
+    {
+      "name": "mfm_128",
+      "ip": "10.10.12.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-12"
+    },
+    {
+      "name": "mfm_129",
+      "ip": "10.10.13.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-13"
+    },
+    {
+      "name": "mfm_130",
+      "ip": "10.10.13.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-13"
+    },
+    {
+      "name": "mfm_131",
+      "ip": "10.10.13.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-13"
+    },
+    {
+      "name": "mfm_132",
+      "ip": "10.10.13.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-13"
+    },
+    {
+      "name": "mfm_133",
+      "ip": "10.10.13.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-13"
+    },
+    {
+      "name": "mfm_134",
+      "ip": "10.10.13.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-13"
+    },
+    {
+      "name": "mfm_135",
+      "ip": "10.10.13.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-13"
+    },
+    {
+      "name": "mfm_136",
+      "ip": "10.10.13.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-13"
+    },
+    {
+      "name": "mfm_137",
+      "ip": "10.10.13.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-13"
+    },
+    {
+      "name": "mfm_138",
+      "ip": "10.10.13.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-13"
+    },
+    {
+      "name": "mfm_139",
+      "ip": "10.10.14.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-14"
+    },
+    {
+      "name": "mfm_140",
+      "ip": "10.10.14.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-14"
+    },
+    {
+      "name": "mfm_141",
+      "ip": "10.10.14.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-14"
+    },
+    {
+      "name": "mfm_142",
+      "ip": "10.10.14.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-14"
+    },
+    {
+      "name": "mfm_143",
+      "ip": "10.10.14.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-14"
+    },
+    {
+      "name": "mfm_144",
+      "ip": "10.10.14.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-14"
+    },
+    {
+      "name": "mfm_145",
+      "ip": "10.10.14.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-14"
+    },
+    {
+      "name": "mfm_146",
+      "ip": "10.10.14.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-14"
+    },
+    {
+      "name": "mfm_147",
+      "ip": "10.10.14.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-14"
+    },
+    {
+      "name": "mfm_148",
+      "ip": "10.10.14.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-14"
+    },
+    {
+      "name": "mfm_149",
+      "ip": "10.10.15.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-15"
+    },
+    {
+      "name": "mfm_150",
+      "ip": "10.10.15.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-15"
+    },
+    {
+      "name": "mfm_151",
+      "ip": "10.10.15.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-15"
+    },
+    {
+      "name": "mfm_152",
+      "ip": "10.10.15.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-15"
+    },
+    {
+      "name": "mfm_153",
+      "ip": "10.10.15.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-15"
+    },
+    {
+      "name": "mfm_154",
+      "ip": "10.10.15.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-15"
+    },
+    {
+      "name": "mfm_155",
+      "ip": "10.10.15.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-15"
+    },
+    {
+      "name": "mfm_156",
+      "ip": "10.10.15.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-15"
+    },
+    {
+      "name": "mfm_157",
+      "ip": "10.10.15.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-15"
+    },
+    {
+      "name": "mfm_158",
+      "ip": "10.10.15.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-15"
+    },
+    {
+      "name": "mfm_159",
+      "ip": "10.10.16.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-16"
+    },
+    {
+      "name": "mfm_160",
+      "ip": "10.10.16.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-16"
+    },
+    {
+      "name": "mfm_161",
+      "ip": "10.10.16.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-16"
+    },
+    {
+      "name": "mfm_162",
+      "ip": "10.10.16.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-16"
+    },
+    {
+      "name": "mfm_163",
+      "ip": "10.10.16.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-16"
+    },
+    {
+      "name": "mfm_164",
+      "ip": "10.10.16.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-16"
+    },
+    {
+      "name": "mfm_165",
+      "ip": "10.10.16.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-16"
+    },
+    {
+      "name": "mfm_166",
+      "ip": "10.10.16.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-16"
+    },
+    {
+      "name": "mfm_167",
+      "ip": "10.10.16.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-16"
+    },
+    {
+      "name": "mfm_168",
+      "ip": "10.10.16.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-16"
+    },
+    {
+      "name": "mfm_169",
+      "ip": "10.10.16.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 11,
+      "connections": "GIC-16"
+    },
+    {
+      "name": "mfm_170",
+      "ip": "10.10.16.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 12,
+      "connections": "GIC-16"
+    },
+    {
+      "name": "mfm_171",
+      "ip": "10.10.16.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 13,
+      "connections": "GIC-16"
+    },
+    {
+      "name": "mfm_172",
+      "ip": "10.10.17.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-17"
+    },
+    {
+      "name": "mfm_173",
+      "ip": "10.10.17.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-17"
+    },
+    {
+      "name": "mfm_174",
+      "ip": "10.10.17.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-17"
+    },
+    {
+      "name": "mfm_175",
+      "ip": "10.10.17.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-17"
+    },
+    {
+      "name": "mfm_176",
+      "ip": "10.10.17.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-17"
+    },
+    {
+      "name": "mfm_177",
+      "ip": "10.10.17.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-17"
+    },
+    {
+      "name": "mfm_178",
+      "ip": "10.10.17.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-17"
+    },
+    {
+      "name": "mfm_179",
+      "ip": "10.10.17.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-17"
+    },
+    {
+      "name": "mfm_180",
+      "ip": "10.10.17.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-17"
+    },
+    {
+      "name": "mfm_181",
+      "ip": "10.10.17.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-17"
+    },
+    {
+      "name": "mfm_182",
+      "ip": "10.10.17.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 11,
+      "connections": "GIC-17"
+    },
+    {
+      "name": "mfm_183",
+      "ip": "10.10.17.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 12,
+      "connections": "GIC-17"
+    },
+    {
+      "name": "mfm_184",
+      "ip": "10.10.17.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 13,
+      "connections": "GIC-17"
+    },
+    {
+      "name": "mfm_185",
+      "ip": "10.10.18.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-18"
+    },
+    {
+      "name": "mfm_186",
+      "ip": "10.10.18.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-18"
+    },
+    {
+      "name": "mfm_187",
+      "ip": "10.10.18.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-18"
+    },
+    {
+      "name": "mfm_188",
+      "ip": "10.10.18.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-18"
+    },
+    {
+      "name": "mfm_189",
+      "ip": "10.10.18.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-18"
+    },
+    {
+      "name": "mfm_190",
+      "ip": "10.10.18.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-18"
+    },
+    {
+      "name": "mfm_191",
+      "ip": "10.10.18.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-18"
+    },
+    {
+      "name": "mfm_192",
+      "ip": "10.10.18.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-18"
+    },
+    {
+      "name": "mfm_193",
+      "ip": "10.10.18.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-18"
+    },
+    {
+      "name": "mfm_194",
+      "ip": "10.10.18.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-18"
+    },
+    {
+      "name": "mfm_195",
+      "ip": "10.10.18.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 11,
+      "connections": "GIC-18"
+    },
+    {
+      "name": "mfm_196",
+      "ip": "10.10.18.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 12,
+      "connections": "GIC-18"
+    },
+    {
+      "name": "mfm_197",
+      "ip": "10.10.19.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-19"
+    },
+    {
+      "name": "mfm_198",
+      "ip": "10.10.19.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-19"
+    },
+    {
+      "name": "mfm_199",
+      "ip": "10.10.19.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-19"
+    },
+    {
+      "name": "mfm_200",
+      "ip": "10.10.19.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-19"
+    },
+    {
+      "name": "mfm_201",
+      "ip": "10.10.19.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-19"
+    },
+    {
+      "name": "mfm_202",
+      "ip": "10.10.19.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-19"
+    },
+    {
+      "name": "mfm_203",
+      "ip": "10.10.19.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-19"
+    },
+    {
+      "name": "mfm_204",
+      "ip": "10.10.19.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-19"
+    },
+    {
+      "name": "mfm_205",
+      "ip": "10.10.19.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-19"
+    },
+    {
+      "name": "mfm_206",
+      "ip": "10.10.19.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-19"
+    },
+    {
+      "name": "mfm_207",
+      "ip": "10.10.19.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 11,
+      "connections": "GIC-19"
+    },
+    {
+      "name": "mfm_208",
+      "ip": "10.10.19.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 12,
+      "connections": "GIC-19"
+    },
+    {
+      "name": "mfm_209",
+      "ip": "10.10.20.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-20"
+    },
+    {
+      "name": "mfm_210",
+      "ip": "10.10.20.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-20"
+    },
+    {
+      "name": "mfm_211",
+      "ip": "10.10.20.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-20"
+    },
+    {
+      "name": "mfm_212",
+      "ip": "10.10.20.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-20"
+    },
+    {
+      "name": "mfm_213",
+      "ip": "10.10.20.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-20"
+    },
+    {
+      "name": "mfm_214",
+      "ip": "10.10.20.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-20"
+    },
+    {
+      "name": "mfm_215",
+      "ip": "10.10.20.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-20"
+    },
+    {
+      "name": "mfm_216",
+      "ip": "10.10.20.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-20"
+    },
+    {
+      "name": "mfm_217",
+      "ip": "10.10.20.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-20"
+    },
+    {
+      "name": "mfm_218",
+      "ip": "10.10.20.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-20"
+    },
+    {
+      "name": "mfm_219",
+      "ip": "10.10.20.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 11,
+      "connections": "GIC-20"
+    },
+    {
+      "name": "mfm_220",
+      "ip": "10.10.20.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 12,
+      "connections": "GIC-20"
+    },
+    {
+      "name": "mfm_221",
+      "ip": "10.10.21.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-21"
+    },
+    {
+      "name": "mfm_222",
+      "ip": "10.10.21.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-21"
+    },
+    {
+      "name": "mfm_223",
+      "ip": "10.10.21.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-21"
+    },
+    {
+      "name": "mfm_224",
+      "ip": "10.10.21.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-21"
+    },
+    {
+      "name": "mfm_225",
+      "ip": "10.10.21.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-21"
+    },
+    {
+      "name": "mfm_226",
+      "ip": "10.10.21.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-21"
+    },
+    {
+      "name": "mfm_227",
+      "ip": "10.10.21.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-21"
+    },
+    {
+      "name": "mfm_228",
+      "ip": "10.10.21.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-21"
+    },
+    {
+      "name": "mfm_229",
+      "ip": "10.10.21.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-21"
+    },
+    {
+      "name": "mfm_230",
+      "ip": "10.10.21.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-21"
+    },
+    {
+      "name": "mfm_231",
+      "ip": "10.10.21.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 11,
+      "connections": "GIC-21"
+    },
+    {
+      "name": "mfm_232",
+      "ip": "10.10.21.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 12,
+      "connections": "GIC-21"
+    },
+    {
+      "name": "mfm_233",
+      "ip": "10.10.22.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "GIC-22"
+    },
+    {
+      "name": "mfm_234",
+      "ip": "10.10.22.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "GIC-22"
+    },
+    {
+      "name": "mfm_235",
+      "ip": "10.10.22.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "GIC-22"
+    },
+    {
+      "name": "mfm_236",
+      "ip": "10.10.22.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "GIC-22"
+    },
+    {
+      "name": "mfm_237",
+      "ip": "10.10.22.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "GIC-22"
+    },
+    {
+      "name": "mfm_238",
+      "ip": "10.10.22.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "GIC-22"
+    },
+    {
+      "name": "mfm_239",
+      "ip": "10.10.22.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "GIC-22"
+    },
+    {
+      "name": "mfm_240",
+      "ip": "10.10.22.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "GIC-22"
+    },
+    {
+      "name": "mfm_241",
+      "ip": "10.10.22.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "GIC-22"
+    },
+    {
+      "name": "mfm_242",
+      "ip": "10.10.22.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "GIC-22"
+    },
+    {
+      "name": "mfm_243",
+      "ip": "10.10.22.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 11,
+      "connections": "GIC-22"
+    },
+    {
+      "name": "mfm_244",
+      "ip": "10.10.22.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 12,
+      "connections": "GIC-22"
+    },
+    {
+      "name": "mfm_245",
+      "ip": "10.10.22.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 13,
+      "connections": "GIC-22"
+    },
+    {
+      "name": "ahu_001",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "ahu_002",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "ahu_003",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "ahu_004",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "ahu_005",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "ahu_006",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "ahu_007",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "ahu_008",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "ahu_009",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "ahu_010",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "ahu_011",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 11,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "air_washer_001",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 12,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "air_washer_002",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 13,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "air_washer_003",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 14,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "air_washer_004",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 15,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "air_washer_005",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 16,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "air_washer_006",
+      "ip": "10.10.23.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 17,
+      "connections": "PLC-AHU"
+    },
+    {
+      "name": "chiller_001",
+      "ip": "10.10.25.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "PLC-CHW"
+    },
+    {
+      "name": "chiller_002",
+      "ip": "10.10.25.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "PLC-CHW"
+    },
+    {
+      "name": "chiller_003",
+      "ip": "10.10.25.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "PLC-CHW"
+    },
+    {
+      "name": "chiller_004",
+      "ip": "10.10.25.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "PLC-CHW"
+    },
+    {
+      "name": "compressor_001",
+      "ip": "10.10.25.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "PLC-CHW"
+    },
+    {
+      "name": "pcw_001",
+      "ip": "10.10.25.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "PLC-CHW"
+    },
+    {
+      "name": "csu_001",
+      "ip": "10.10.24.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 1,
+      "connections": "PLC-CSU"
+    },
+    {
+      "name": "csu_002",
+      "ip": "10.10.24.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 2,
+      "connections": "PLC-CSU"
+    },
+    {
+      "name": "csu_003",
+      "ip": "10.10.24.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 3,
+      "connections": "PLC-CSU"
+    },
+    {
+      "name": "csu_004",
+      "ip": "10.10.24.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 4,
+      "connections": "PLC-CSU"
+    },
+    {
+      "name": "csu_005",
+      "ip": "10.10.24.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 5,
+      "connections": "PLC-CSU"
+    },
+    {
+      "name": "csu_006",
+      "ip": "10.10.24.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 6,
+      "connections": "PLC-CSU"
+    },
+    {
+      "name": "csu_007",
+      "ip": "10.10.24.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 7,
+      "connections": "PLC-CSU"
+    },
+    {
+      "name": "csu_008",
+      "ip": "10.10.24.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 8,
+      "connections": "PLC-CSU"
+    },
+    {
+      "name": "csu_009",
+      "ip": "10.10.24.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 9,
+      "connections": "PLC-CSU"
+    },
+    {
+      "name": "csu_010",
+      "ip": "10.10.24.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 10,
+      "connections": "PLC-CSU"
+    },
+    {
+      "name": "tfa_001",
+      "ip": "10.10.24.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 11,
+      "connections": "PLC-CSU"
+    },
+    {
+      "name": "tfa_002",
+      "ip": "10.10.24.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 12,
+      "connections": "PLC-CSU"
+    },
+    {
+      "name": "tfa_003",
+      "ip": "10.10.24.10",
+      "port": 502,
+      "protocol": "modbus",
+      "unit": 13,
+      "connections": "PLC-CSU"
+    }
+  ]
+}

@@ -14,7 +14,17 @@ _extra_issuers = [
     for s in os.environ.get("KC_ALLOWED_ISSUERS", "").split(",")
     if s.strip()
 ]
-KEYCLOAK_ALLOWED_ISSUERS: List[str] = list(dict.fromkeys([_default_issuer, *_extra_issuers]))
+# Include common localhost proxy issuers so JWTs obtained via Vite dev proxies are accepted
+_localhost_issuers = [
+    f"http://localhost:5180/keycloak/realms/{KEYCLOAK_REALM}",
+    f"http://localhost:5182/keycloak/realms/{KEYCLOAK_REALM}",
+    f"http://100.90.185.31:5182/keycloak/realms/{KEYCLOAK_REALM}",
+    f"http://100.90.185.31:5180/keycloak/realms/{KEYCLOAK_REALM}",
+    f"http://127.0.0.1:8080/keycloak/realms/{KEYCLOAK_REALM}",
+    f"http://localhost:8080/keycloak/realms/{KEYCLOAK_REALM}",
+    f"http://100.90.185.31:8080/keycloak/realms/{KEYCLOAK_REALM}",
+]
+KEYCLOAK_ALLOWED_ISSUERS: List[str] = list(dict.fromkeys([_default_issuer, *_localhost_issuers, *_extra_issuers]))
 
 # Admin client credentials (service account for user management)
 KEYCLOAK_ADMIN_CLIENT_ID: str = os.environ.get("KC_ADMIN_CLIENT_ID", "neuract_owner")
