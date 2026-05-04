@@ -90,3 +90,6 @@ target/
 *.pdb
 *.rlib
 *.rmeta
+
+# MFM source PDFs (local to deployment, not versioned)
+agent/data/mfm_docs/

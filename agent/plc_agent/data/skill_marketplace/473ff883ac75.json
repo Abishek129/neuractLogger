@@ -1,0 +1,20 @@
+{
+  "skill_id": "473ff883ac75",
+  "skill_name": "test_skill",
+  "description": "",
+  "version": 1,
+  "tags": [],
+  "success_count": 0,
+  "failure_count": 0,
+  "success_rate": 0.0,
+  "author_deployment": "37cc9684",
+  "content_hash": "62563c28d0c41bfc",
+  "deprecated": false,
+  "created_at": "2026-04-17T18:51:40.826773+00:00",
+  "updated_at": "2026-04-17T18:51:40.826773+00:00",
+  "content": {
+    "description": "",
+    "tags": [],
+    "source_session": "ff2ae2c89c05"
+  }
+}

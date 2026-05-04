@@ -33,6 +33,7 @@ use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 const DEFAULT_OPCUA_ENDPOINT: &str = "opc.tcp://127.0.0.1:4840/freeopcua/server/";
 const ERROR_LOG_FILENAME: &str = "error_log_rust.csv";
 const LOG_FILENAME: &str = "agent_rust.log";
+const MQTT_LOG_FILENAME: &str = "mqtt_jobs.log";
 const LOG_MAX_BYTES: u64 = 500 * 1024 * 1024; // 500 MB, matches Python
 
 // --- Rotating file writer (mirrors Python RotatingFileHandler) ---
@@ -170,6 +171,41 @@ fn setup_logging() {
     info!("Logging to file: {}", log_path.display());
 }
 
+// --- MQTT-specific log file ---
+
+static MQTT_LOGGER: OnceLock<Mutex<RotatingFileWriter>> = OnceLock::new();
+
+fn setup_mqtt_logging() {
+    let dir = log_dir();
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join(MQTT_LOG_FILENAME);
+    match RotatingFileWriter::new(path.clone(), LOG_MAX_BYTES) {
+        Ok(w) => {
+            MQTT_LOGGER.set(Mutex::new(w)).ok();
+            info!("MQTT log file: {}", path.display());
+        }
+        Err(e) => {
+            warn!("MQTT log file setup failed: {}", e);
+        }
+    }
+}
+
+/// Write a line to the MQTT-specific log file (in addition to the main log).
+fn mqtt_log(level: &str, msg: &str) {
+    if let Some(lock) = MQTT_LOGGER.get() {
+        if let Ok(mut w) = lock.lock() {
+            let line = format!(
+                "{} [{}] {}\n",
+                Local::now().format("%Y-%m-%d %H:%M:%S"),
+                level,
+                msg
+            );
+            let _ = w.write_all(line.as_bytes());
+            let _ = w.flush();
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct JobDef {
     id: String,
@@ -250,6 +286,67 @@ struct Gateway {
     host: Option<String>,
 }
 
+/// Modbus register type, derived from industry-standard address prefixes.
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
+enum RegisterType {
+    Coil,            // 0xxxx — FC 1/5/15
+    DiscreteInput,   // 1xxxx — FC 2
+    InputRegister,   // 3xxxx — FC 4
+    HoldingRegister, // 4xxxx — FC 3 (default)
+}
+
+/// Parse a Modbus address string into (RegisterType, raw_register).
+/// Supports industry-standard prefixed addresses and raw numeric addresses.
+///   "40001" → (HoldingRegister, 0)   — 4xxxx prefix, 1-based
+///   "30001" → (InputRegister, 0)     — 3xxxx prefix, 1-based
+///   "10001" → (DiscreteInput, 0)     — 1xxxx prefix, 1-based
+///   "00001" → (Coil, 0)             — 0xxxx prefix, 1-based
+///   "0"     → (HoldingRegister, 0)   — raw register, no prefix
+///   "100"   → (HoldingRegister, 100) — raw register, no prefix
+fn parse_modbus_address(raw: &str) -> Option<(RegisterType, u16)> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let num: u32 = s.parse().ok()?;
+
+    // 5-digit industry-standard addresses (40001-49999, 30001-39999, etc.)
+    if num >= 40001 && num <= 49999 {
+        return Some((RegisterType::HoldingRegister, (num - 40001) as u16));
+    }
+    if num >= 30001 && num <= 39999 {
+        return Some((RegisterType::InputRegister, (num - 30001) as u16));
+    }
+    if num >= 10001 && num <= 19999 {
+        return Some((RegisterType::DiscreteInput, (num - 10001) as u16));
+    }
+    if num >= 1 && num <= 9999 && s.len() == 5 {
+        // 5-digit with leading zero: "00001" → coil 0
+        return Some((RegisterType::Coil, (num - 1) as u16));
+    }
+
+    // 6-digit extended addresses (400001-465535, 300001-365535)
+    if num >= 400001 && num <= 465535 {
+        return Some((RegisterType::HoldingRegister, (num - 400001) as u16));
+    }
+    if num >= 300001 && num <= 365535 {
+        return Some((RegisterType::InputRegister, (num - 300001) as u16));
+    }
+    if num >= 100001 && num <= 165535 {
+        return Some((RegisterType::DiscreteInput, (num - 100001) as u16));
+    }
+    if num >= 1 && num <= 65535 && s.len() == 6 {
+        return Some((RegisterType::Coil, (num - 1) as u16));
+    }
+
+    // Raw numeric — treat as holding register (backwards compatible)
+    if num <= 65535 {
+        return Some((RegisterType::HoldingRegister, num as u16));
+    }
+
+    None
+}
+
 /// A field within a register bucket, precomputed at job startup.
 #[derive(Clone, Debug)]
 struct BucketField {
@@ -268,6 +365,8 @@ struct RegisterBucket {
     start_addr: u16,
     /// Number of registers to read = max(field_addr + reg_count) - start_addr, capped at 125
     read_count: u16,
+    /// Register type for this bucket (all fields in a bucket share the same type)
+    reg_type: RegisterType,
     /// Fields within this bucket
     fields: Vec<BucketField>,
 }
@@ -495,6 +594,7 @@ struct JobHandle {
 #[tokio::main]
 async fn main() -> Result<()> {
     setup_logging();
+    setup_mqtt_logging();
     let app_db_url = env::var("APP_DB_URL").context("APP_DB_URL is required")?;
     let bench_db_url = env::var("BENCH_DB_URL")
         .unwrap_or_else(|_| "postgresql://postgres@localhost/loggerfast_metrics".to_string());
@@ -933,6 +1033,21 @@ async fn run_job(
                 win_reads_err,
                 win_writes_err,
             );
+            // Log metrics to MQTT-specific log if this job has any MQTT devices
+            {
+                let has_mqtt = table_runtimes.values().any(|rt| rt.device.protocol.eq_ignore_ascii_case("mqtt"));
+                if has_mqtt {
+                    mqtt_log("METRICS", &format!(
+                        "job={} window={:.1}s reads/s={:.1} writes/s={:.1} read_avg_ms={:.3} write_avg_ms={:.3} connect_avg_ms={:.3} fields_avg_ms={:.3} build_avg_ms={:.3} exec_avg_ms={:.3} loop_p95_ms={} overrun_pct={:.1} read_err={} write_err={}",
+                        job.id, window_secs, reads_per_sec, writes_per_sec,
+                        read_avg_ms, write_avg_ms,
+                        modbus_connect_avg_ms, modbus_fields_avg_ms,
+                        sql_build_avg_ms, db_execute_avg_ms,
+                        p95_txt, overrun_pct,
+                        win_reads_err, win_writes_err,
+                    ));
+                }
+            }
             // #9: Fire-and-forget bench DB write — don't block the loop
             {
                 let bc = bench_client.clone();
@@ -1035,19 +1150,16 @@ async fn process_table(
 /// Precompute register buckets for Modbus bulk reads.
 /// Divides the register address space into 125-register sections and groups fields by section.
 fn build_modbus_buckets(mapping: &[MappingRow]) -> Vec<RegisterBucket> {
-    let mut bucket_map: HashMap<u16, Vec<BucketField>> = HashMap::new();
+    // Key: (register_type, bucket_index) → fields
+    let mut bucket_map: HashMap<(RegisterType, u16), Vec<BucketField>> = HashMap::new();
 
     for row in mapping {
         if !row.protocol.eq_ignore_ascii_case("modbus") {
             continue;
         }
-        let addr_raw = row.address.trim();
-        if addr_raw.is_empty() {
-            continue;
-        }
-        let address: u16 = match addr_raw.parse() {
-            Ok(a) => a,
-            Err(_) => continue,
+        let (reg_type, address) = match parse_modbus_address(&row.address) {
+            Some(v) => v,
+            None => continue,
         };
         let encoding = if !row.encoding.is_empty() {
             row.encoding.to_lowercase()
@@ -1059,7 +1171,7 @@ fn build_modbus_buckets(mapping: &[MappingRow]) -> Vec<RegisterBucket> {
         let (reg_count, _) = modbus_encoding_info(&encoding);
 
         let bucket_idx = address / 125;
-        bucket_map.entry(bucket_idx).or_default().push(BucketField {
+        bucket_map.entry((reg_type, bucket_idx)).or_default().push(BucketField {
             field_key: row.field_key.clone(),
             address,
             reg_count,
@@ -1069,7 +1181,7 @@ fn build_modbus_buckets(mapping: &[MappingRow]) -> Vec<RegisterBucket> {
     }
 
     let mut buckets: Vec<RegisterBucket> = Vec::new();
-    for (bucket_idx, fields) in bucket_map {
+    for ((reg_type, bucket_idx), fields) in bucket_map {
         let start_addr = bucket_idx * 125;
         // read_count = distance from bucket start to the end of the last field, capped at 125
         let max_end = fields.iter()
@@ -1081,6 +1193,7 @@ fn build_modbus_buckets(mapping: &[MappingRow]) -> Vec<RegisterBucket> {
         buckets.push(RegisterBucket {
             start_addr,
             read_count,
+            reg_type,
             fields,
         });
     }
@@ -1399,8 +1512,10 @@ async fn write_all_tables_batch(
         );
 
         let t_exec = Instant::now();
-        client.batch_execute(&sql).await
-            .context("batch write all tables failed")?;
+        if let Err(e) = client.batch_execute(&sql).await {
+            warn!("Job {} [WRITE_ALL_BATCH] PG error: {} | sql_preview: {}", job_id, e, &sql[..sql.len().min(600)]);
+            return Err(anyhow!("batch write all tables failed: {}", e));
+        }
         let execute_ms = t_exec.elapsed().as_secs_f64() * 1000.0;
         total_execute_ms += execute_ms;
 
@@ -1414,7 +1529,7 @@ async fn write_all_tables_batch(
 }
 
 /// #4: Owned version of write_all_tables_batch for background spawning.
-/// Takes Vec of (client, table_name, values) so it can be 'static.
+/// Takes Vec of (client, table_name, values) so it can be `static.
 async fn write_all_tables_batch_owned(
     pending: &[(Arc<PgClient>, String, FieldMap)],
     job_id: &str,
@@ -1471,8 +1586,15 @@ async fn write_all_tables_batch_owned(
         );
 
         let t_exec = Instant::now();
-        client.batch_execute(&sql).await
-            .context("batch write all tables failed")?;
+        if let Err(e) = client.batch_execute(&sql).await {
+            if let Some(d) = e.as_db_error() {
+                eprintln!("MQTT_WRITE_ERR: severity={} code={} message={} detail={:?}", d.severity(), d.code().code(), d.message(), d.detail());
+            } else {
+                eprintln!("MQTT_WRITE_ERR: {}", e);
+            }
+            eprintln!("MQTT_WRITE_SQL: {}", &sql[..sql.len().min(1500)]);
+            return Err(anyhow!("batch write all tables failed: {}", e));
+        }
         let execute_ms = t_exec.elapsed().as_secs_f64() * 1000.0;
         total_execute_ms += execute_ms;
 
@@ -2154,16 +2276,34 @@ fn modbus_encoding_info(enc: &str) -> (u16, &'static str) {
     }
 }
 
+/// Reorder registers according to byte-order code before big-endian decode.
+/// ABCD = Big Endian (no change), CDAB = word-swapped, BADC = byte-swapped, DCBA = little endian.
+fn reorder_registers(regs: &[u16], order: &str) -> Vec<u16> {
+    match order {
+        "CDAB" => regs.iter().rev().copied().collect(),
+        "BADC" => regs.iter().map(|r| r.swap_bytes()).collect(),
+        "DCBA" => regs.iter().rev().map(|r| r.swap_bytes()).collect(),
+        _ => regs.to_vec(), // ABCD or unknown → no change
+    }
+}
+
 /// Decode raw Modbus registers into a float value (mirrors Python _decode_registers).
-fn decode_registers(regs: &[u16], encoding: &str) -> Option<f64> {
+fn decode_registers(regs: &[u16], encoding: &str, byte_order: &str) -> Option<f64> {
     let enc = encoding.to_lowercase();
     let (count, tag) = modbus_encoding_info(&enc);
     if regs.len() < count as usize {
         return None;
     }
+    let subset = &regs[..count as usize];
+    // Apply byte-order reordering for multi-register types
+    let ordered = if count > 1 {
+        reorder_registers(subset, byte_order)
+    } else {
+        subset.to_vec()
+    };
     // Pack registers as big-endian 16-bit words into byte buffer
     let mut buf = vec![0u8; count as usize * 2];
-    for (i, &reg) in regs.iter().take(count as usize).enumerate() {
+    for (i, &reg) in ordered.iter().enumerate() {
         BigEndian::write_u16(&mut buf[i * 2..i * 2 + 2], reg);
     }
     let val = match tag {
@@ -2268,6 +2408,7 @@ impl MqttManager {
         let task = tokio::spawn(mqtt_broker_task(event_loop, cache_clone, key_log));
 
         info!("MQTT connected to broker {} topic={}", broker_key, topic);
+        mqtt_log("INFO", &format!("CONNECTED broker={} topic={}", broker_key, topic));
         let state = BrokerState { cache: cache.clone(), _client: client, _task: task };
         self.brokers.lock().unwrap().insert(broker_key.to_string(), state);
         Ok(cache)
@@ -2286,16 +2427,20 @@ async fn mqtt_broker_task(
                 match serde_json::from_slice::<serde_json::Value>(&p.payload) {
                     Ok(payload) => {
                         if let Some(gw) = payload.get("gw").and_then(|v| v.as_str()) {
+                            let meter_count = payload.get("meters").and_then(|m| m.as_array()).map(|a| a.len()).unwrap_or(0);
+                            mqtt_log("DATA", &format!("broker={} gw={} meters={}", broker_key, gw, meter_count));
                             cache.lock().unwrap().insert(gw.to_string(), payload);
                         }
                     }
                     Err(e) => {
                         warn!("MQTT [{}] JSON parse error: {}", broker_key, e);
+                        mqtt_log("ERROR", &format!("broker={} JSON parse error: {}", broker_key, e));
                     }
                 }
             }
             Err(e) => {
                 warn!("MQTT [{}] event loop error: {} — will retry on next poll", broker_key, e);
+                mqtt_log("ERROR", &format!("broker={} event loop error: {}", broker_key, e));
                 tokio::time::sleep(Duration::from_secs(3)).await;
             }
             _ => {} // Ack packets, connack, suback — ignore
@@ -2379,13 +2524,14 @@ async fn read_mqtt_values(
         let map = cache.lock().unwrap();
         map.get(&mqtt_gw).cloned()
     };
-    let payload = payload.ok_or_else(|| {
-        anyhow!(
-            "MQTT_NO_DATA: no message received yet for gw='{}' on {}",
-            mqtt_gw,
-            broker_key
-        )
-    })?;
+    let payload = match payload {
+        Some(p) => p,
+        None => {
+            let msg = format!("MQTT_NO_DATA: no message received yet for gw='{}' on {}", mqtt_gw, broker_key);
+            mqtt_log("WARN", &format!("job={} {}", job_id, msg));
+            return Err(anyhow!("{}", msg));
+        }
+    };
 
     let meters = payload
         .get("meters")
@@ -2411,7 +2557,7 @@ async fn read_mqtt_values(
         // address = JSON field name in the meter object (e.g. "V1", "kW", "PF")
         let fv_opt: Option<FieldValue> = match meter.get(&row.address) {
             Some(serde_json::Value::Number(n)) => n.as_f64().map(FieldValue::Float),
-            Some(serde_json::Value::Bool(b)) => Some(FieldValue::Bool(*b)),
+            Some(serde_json::Value::Bool(b)) => Some(FieldValue::Float(if *b { 1.0 } else { 0.0 })),
             Some(serde_json::Value::String(s)) => Some(FieldValue::Text(s.clone())),
             _ => None,
         };
@@ -2426,14 +2572,15 @@ async fn read_mqtt_values(
     }
 
     let fields_ms = t_fields.elapsed().as_secs_f64() * 1000.0;
+    let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
     info!(
         "Job {} [READ_MAPPING] [TOTAL] proto=mqtt gw={} meter_id={} fields={} elapsed_ms={:.2}",
-        job_id,
-        mqtt_gw,
-        meter_id,
-        values.len(),
-        t0.elapsed().as_secs_f64() * 1000.0
+        job_id, mqtt_gw, meter_id, values.len(), total_ms
     );
+    mqtt_log("READ", &format!(
+        "job={} gw={} meter_id={} fields={} elapsed_ms={:.2}",
+        job_id, mqtt_gw, meter_id, values.len(), total_ms
+    ));
     Ok((values, ReadTimings { connect_ms, fields_ms }))
 }
 
@@ -2523,11 +2670,25 @@ async fn read_modbus_values(
     let mut values = HashMap::new();
     let t_fields = Instant::now();
 
+    // Byte order: ABCD (default big endian), CDAB, BADC, DCBA
+    let byte_order = device.params.get("order")
+        .and_then(|v| v.as_str())
+        .unwrap_or("ABCD");
+
     ctx.set_slave(Slave(unit_id));
 
     for bucket in buckets {
         let t_bucket = Instant::now();
-        let read_result = ctx.read_holding_registers(bucket.start_addr, bucket.read_count).await;
+        let read_result = match bucket.reg_type {
+            RegisterType::HoldingRegister => ctx.read_holding_registers(bucket.start_addr, bucket.read_count).await,
+            RegisterType::InputRegister => ctx.read_input_registers(bucket.start_addr, bucket.read_count).await,
+            RegisterType::Coil | RegisterType::DiscreteInput => {
+                // Coils/discrete inputs return bits, not registers — read as holding for now
+                // TODO: implement read_coils / read_discrete_inputs with bit decoding
+                warn!("modbus coil/discrete read not yet implemented, falling back to holding registers");
+                ctx.read_holding_registers(bucket.start_addr, bucket.read_count).await
+            }
+        };
         match read_result {
             Ok(Ok(regs)) => {
                 info!(
@@ -2546,7 +2707,7 @@ async fn read_modbus_values(
                         continue;
                     }
                     let field_regs = &regs[offset..end];
-                    if let Some(mut val) = decode_registers(field_regs, &field.encoding) {
+                    if let Some(mut val) = decode_registers(field_regs, &field.encoding, byte_order) {
                         // Post-decode coercion
                         if field.encoding == "bool16" {
                             val = if val != 0.0 { 1.0 } else { 0.0 };

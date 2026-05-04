@@ -28,6 +28,32 @@ log = logging.getLogger(__name__)
 _thread_local = threading.local()
 
 
+def _publish_prediction_alerts(job_id: str, device_id: str, table_id: str, alerts) -> None:
+    """Log and publish prediction/temporal alerts from PredictionManager.feed()."""
+    import json as _json
+    import os as _os
+    for alert in alerts:
+        alert_dict = {
+            "type": "prediction",
+            "alert_code": getattr(alert, "alert_code", {}).value if hasattr(getattr(alert, "alert_code", None), "value") else str(getattr(alert, "alert_code", "")),
+            "device_id": device_id,
+            "table_id": table_id,
+            "parameter": getattr(alert, "parameter", ""),
+            "message": getattr(alert, "message", ""),
+            "sigma": getattr(alert, "sigma", 0),
+            "timestamp": getattr(alert, "timestamp", ""),
+        }
+        log.warning("PREDICTION_ALERT job=%s device=%s: %s", job_id, device_id, alert_dict["message"])
+        # Publish to Redis for WebSocket broadcast
+        try:
+            import redis
+            r = redis.from_url(_os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/3"))
+            r.publish("notifications", _json.dumps(alert_dict))
+            r.close()
+        except Exception:
+            pass  # Redis unavailable — alert still logged
+
+
 def _db_engine_for_table(table_id: str):
     store = Store.instance()
     t = store.get_table(table_id)
@@ -175,6 +201,9 @@ def _read_mapping_values(table_id: str, job_id: str = "") -> Dict[str, Any]:
         if not host:
             raise RuntimeError("MODBUS_HOST_MISSING")
 
+        # Byte order: ABCD (default), CDAB, BADC, DCBA
+        byte_order = (params.get("order") or "ABCD").strip().upper()
+
         # Get port - from device.port or fallback to params or default
         port = dev.get("port")
         if port is None:
@@ -203,7 +232,7 @@ def _read_mapping_values(table_id: str, job_id: str = "") -> Dict[str, Any]:
                         log.warning("Modbus read error field=%s addr=%s unit=%s err=%s", field, address, unit_id, rr)
                         values[field] = None
                         continue
-                    val = _decode_registers(rr.registers, encoding)
+                    val = _decode_registers(rr.registers, encoding, byte_order)
                     # Post-decode type coercion for non-float encodings
                     if encoding == "bool16":
                         val = bool(int(val)) if val is not None else None
@@ -358,7 +387,28 @@ _ENCODING_MAP = {
 }
 
 
-def _decode_registers(regs: list, encoding: str):
+_VALID_ORDERS = {"ABCD", "CDAB", "BADC", "DCBA"}
+
+
+def _reorder_registers(regs: list, order: str) -> list:
+    """Reorder registers according to byte-order code before BE decode.
+
+    ABCD = Big Endian (no change)
+    CDAB = word-swapped (reverse register order)
+    BADC = byte-swapped within each register
+    DCBA = fully reversed (reverse registers + swap bytes)
+    """
+    if order == "ABCD" or order not in _VALID_ORDERS:
+        return regs
+    if order == "CDAB":
+        return list(reversed(regs))
+    if order == "BADC":
+        return [(((r & 0xFF) << 8) | ((r >> 8) & 0xFF)) for r in regs]
+    # DCBA
+    return [(((r & 0xFF) << 8) | ((r >> 8) & 0xFF)) for r in reversed(regs)]
+
+
+def _decode_registers(regs: list, encoding: str, byte_order: str = "ABCD"):
     """Decode raw Modbus registers into a Python value."""
     enc = (encoding or "float32").lower()
     info = _ENCODING_MAP.get(enc)
@@ -368,8 +418,12 @@ def _decode_registers(regs: list, encoding: str):
     count, fmt = info
     if len(regs) < count:
         return None
+    subset = regs[:count]
+    # Apply byte-order reordering for multi-register types
+    if count > 1:
+        subset = _reorder_registers(subset, byte_order)
     # Pack registers as big-endian 16-bit words, then unpack
-    raw = b"".join(r.to_bytes(2, "big") for r in regs[:count])
+    raw = b"".join(r.to_bytes(2, "big") for r in subset)
     return struct.unpack(fmt, raw)[0]
 
 
@@ -632,6 +686,18 @@ def _run_job_loop(job_id: str):
                     iter_read_ms += read_ms
                     
                     METRICS.get_job(job_id).record_read(read_ms, ok=True)
+
+                    # ── Feed to PredictionManager + TemporalManager ──
+                    try:
+                        mapping = Store.instance().get_mapping(tbl_id)
+                        dev_id = (mapping or {}).get("deviceId")
+                        if dev_id and vals:
+                            from ..ai.prediction.monitor import PredictionManager
+                            pred_alerts = PredictionManager.instance().feed(dev_id, tbl_id, vals)
+                            if pred_alerts:
+                                _publish_prediction_alerts(job_id, dev_id, tbl_id, pred_alerts)
+                    except Exception:
+                        pass  # never break the job loop for prediction
                 except Exception as e:
                     log.warning("Job %s read failed for table %s: %s", job_id, tbl_id, e)
                     win_reads_err += 1
@@ -735,6 +801,18 @@ def _run_job_loop(job_id: str):
                     win_reads_ok += 1
                     log.info("Job %s [TRIG_READ] table=%s elapsed_ms=%.2f", job_id, tbl_id, trig_read_ms)
                     METRICS.get_job(job_id).record_read(trig_read_ms, ok=True)
+
+                    # ── Feed to PredictionManager + TemporalManager ──
+                    try:
+                        mapping = Store.instance().get_mapping(tbl_id)
+                        dev_id = (mapping or {}).get("deviceId")
+                        if dev_id and vals:
+                            from ..ai.prediction.monitor import PredictionManager
+                            pred_alerts = PredictionManager.instance().feed(dev_id, tbl_id, vals)
+                            if pred_alerts:
+                                _publish_prediction_alerts(job_id, dev_id, tbl_id, pred_alerts)
+                    except Exception:
+                        pass
                 except Exception as e:
                     log.warning("Trigger job %s read failed for table %s: %s", job_id, tbl_id, e)
                     win_reads_err += 1

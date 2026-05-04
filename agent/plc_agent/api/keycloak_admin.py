@@ -123,6 +123,57 @@ async def get_users_by_realm_role(token: str, role_name: str) -> List[Dict[str, 
     return resp.json()
 
 
+async def get_realm_role(token: str, role_name: str) -> Optional[Dict[str, Any]]:
+    """Get a realm-level role by name. Returns role representation or None."""
+    client = _get_client()
+    resp = await client.get(
+        f"{KEYCLOAK_ADMIN_BASE_URL}/roles/{role_name}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    if resp.status_code == 404:
+        return None
+    if resp.status_code != 200:
+        raise KeycloakAdminError(f"Realm role fetch failed: {resp.status_code} {resp.text}")
+    return resp.json()
+
+
+async def assign_realm_role_to_user(token: str, user_id: str, role_repr: Dict[str, Any]) -> None:
+    """Assign a realm-level role to a user."""
+    client = _get_client()
+    resp = await client.post(
+        f"{KEYCLOAK_ADMIN_BASE_URL}/users/{user_id}/role-mappings/realm",
+        json=[role_repr],
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    if resp.status_code != 204:
+        raise KeycloakAdminError(f"Assign realm role failed: {resp.status_code} {resp.text}")
+
+
+async def remove_realm_role_from_user(token: str, user_id: str, role_repr: Dict[str, Any]) -> None:
+    """Remove a realm-level role from a user."""
+    client = _get_client()
+    resp = await client.request(
+        "DELETE",
+        f"{KEYCLOAK_ADMIN_BASE_URL}/users/{user_id}/role-mappings/realm",
+        json=[role_repr],
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    if resp.status_code != 204:
+        raise KeycloakAdminError(f"Remove realm role failed: {resp.status_code} {resp.text}")
+
+
+async def get_user_realm_roles(token: str, user_id: str) -> List[Dict[str, Any]]:
+    """Get all realm-level roles assigned to a user."""
+    client = _get_client()
+    resp = await client.get(
+        f"{KEYCLOAK_ADMIN_BASE_URL}/users/{user_id}/role-mappings/realm",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    if resp.status_code != 200:
+        raise KeycloakAdminError(f"Get user realm roles failed: {resp.status_code} {resp.text}")
+    return resp.json()
+
+
 async def get_client_uuid(token: str, client_id: str) -> Optional[str]:
     client = _get_client()
     resp = await client.get(
@@ -178,4 +229,20 @@ async def user_login(username: str, password: str) -> Dict[str, Any]:
     resp = await client.post(KEYCLOAK_TOKEN_URL, data=data)
     if resp.status_code != 200:
         raise KeycloakAdminError(f"Login failed: {resp.status_code} {resp.text}")
+    return resp.json()
+
+
+async def user_refresh(refresh_token: str) -> Dict[str, Any]:
+    """Refresh an access token using a refresh_token grant."""
+    client = _get_client()
+    data: Dict[str, str] = {
+        "grant_type": "refresh_token",
+        "client_id": KEYCLOAK_ADMIN_CLIENT_ID,
+        "refresh_token": refresh_token,
+    }
+    if KEYCLOAK_ADMIN_CLIENT_SECRET:
+        data["client_secret"] = KEYCLOAK_ADMIN_CLIENT_SECRET
+    resp = await client.post(KEYCLOAK_TOKEN_URL, data=data)
+    if resp.status_code != 200:
+        raise KeycloakAdminError(f"Token refresh failed: {resp.status_code} {resp.text}")
     return resp.json()

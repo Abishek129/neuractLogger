@@ -1,0 +1,10 @@
+[
+  {
+    "role": "user",
+    "content": "how many gateways?"
+  },
+  {
+    "role": "assistant",
+    "content": "Full system summary:\n- **Gateways:** 32\n- **Devices:** 332\n- **Schemas:** 21\n- **Tables:** 346\n- **Jobs:** 18"
+  }
+]

@@ -1,0 +1,25 @@
+{
+  "skill_id": "4bad9c2cf801",
+  "skill_name": "roundtrip_test",
+  "description": "RT",
+  "version": 1,
+  "tags": [
+    "rt"
+  ],
+  "success_count": 0,
+  "failure_count": 0,
+  "success_rate": 0.0,
+  "author_deployment": "37cc9684",
+  "content_hash": "b971686dec7b41ef",
+  "deprecated": false,
+  "created_at": "2026-04-15T07:52:26.325497+00:00",
+  "updated_at": "2026-04-15T07:52:26.325497+00:00",
+  "content": {
+    "description": "RT",
+    "tags": [
+      "rt"
+    ],
+    "steps": "do stuff",
+    "author_deployment": "37cc9684"
+  }
+}

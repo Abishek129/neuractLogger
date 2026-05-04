@@ -1,0 +1,17 @@
+{
+  "valid": true,
+  "stage": "applied",
+  "no_retries": true,
+  "no_user_corrections": true,
+  "clean_run": true,
+  "device_count": 3,
+  "error_types": [],
+  "tool_call_count": 20,
+  "patterns": [
+    {
+      "id": "batch_3dev",
+      "name": "batch_3_devices",
+      "description": "Configured 3 devices with 1 tables, 3 mappings"
+    }
+  ]
+}

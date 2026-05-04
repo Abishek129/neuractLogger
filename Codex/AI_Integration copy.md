@@ -1055,6 +1055,12 @@ Each phase is self-contained and testable. Phases within the same wave run in pa
 
 ---
 
+## ⚠️ MANDATORY: All AI code goes in `agent/plc_agent/api/ai/`
+
+Every phase must place all new files inside `agent/plc_agent/api/ai/` (or sub-packages under it). The vendored Hermes framework goes in `agent/vendor/hermes-agent/`. No existing files outside `ai/` are modified except `app.py` (one `include_router` line, Phase 1A only). This rule applies to **all phases, all waves, all sessions**.
+
+---
+
 ## Wave Execution Plan
 
 ```
@@ -1172,20 +1178,20 @@ Do NOT modify files outside your scope. Commit to your branch only.
 
 ---
 
-### Phase 1A: Hermes Foundation — Get the Agent Loop Running
+### Phase 1A: Hermes Foundation — Get the Agent Loop Running ✅ DONE
 
 **Goal:** Prove that Hermes runs in-process inside the FastAPI agent, calls tools, and streams NDJSON back.
 
 **Scope:**
-- Vendor `hermes-agent/` framework from Neurareport V2
-- Fork `llm.py` — Qwen3.5-27B + GLM-OCR provider config, env-driven
-- Fork `hermes_agent.py` — agent wrapper, background thread (`asyncio.to_thread()`), NDJSON drain loop
-- Fork `hermes_adapter.py` — tool registration into `ToolRegistry`, sync wrappers via `asyncio.run_coroutine_threadsafe()`, callback bridge (`on_tool_start`, `on_tool_complete`)
-- Fork `session.py` — state machine with LoggerFast states (`created → chatting → plan_proposed → awaiting_review → approved → applying → applied / failed / discarded`)
-- Fork `chat_history.py` — conversation persistence
-- Minimal system prompt — persona ("LoggerFast AI Assistant"), basic rules, no state directives yet
-- 3 read-only tools to prove the loop: `read_config`, `read_gateway_list`, `read_schema_list`
-- API endpoints: `POST /ai/sessions`, `POST /ai/sessions/{id}/chat` (NDJSON streaming)
+- Vendor `hermes-agent/` framework from Neurareport V2 into `agent/vendor/hermes-agent/`
+- `ai/llm.py` — Qwen3.5-27B + GLM-OCR provider config, env-driven
+- `ai/hermes_agent.py` — agent wrapper, background thread (`asyncio.to_thread()`), NDJSON drain loop
+- `ai/hermes_adapter.py` — tool registration into `ToolRegistry`, sync wrappers via `asyncio.run_coroutine_threadsafe()`, callback bridge (`on_tool_start`, `on_tool_complete`)
+- `ai/session.py` — state machine with LoggerFast states (`created → chatting → plan_proposed → awaiting_review → approved → applying → applied / failed / discarded`)
+- `ai/chat_history.py` — conversation persistence
+- `ai/system_prompt.py` — persona ("LoggerFast AI Assistant"), basic rules, no state directives yet
+- `ai/tools.py` — 3 read-only tools to prove the loop: `read_config`, `read_gateway_list`, `read_schema_list`
+- `ai/router.py` — API endpoints: `POST /ai/sessions`, `POST /ai/sessions/{id}/chat` (NDJSON streaming)
 
 **Test:** Start a session, send "what devices are configured?", Hermes calls `read_config`, returns answer via NDJSON `chat_complete` event.
 
@@ -1193,7 +1199,7 @@ Do NOT modify files outside your scope. Commit to your branch only.
 
 ---
 
-### Phase 1B: Full Read Tool Surface
+### Phase 1B: Full Read Tool Surface ✅ DONE
 
 **Goal:** Hermes can answer any question about the current system state and read source code for debugging.
 
@@ -1208,7 +1214,7 @@ Do NOT modify files outside your scope. Commit to your branch only.
 
 ---
 
-### Phase 1C: Write Tools + Approval Gate
+### Phase 1C: Write Tools + Approval Gate ✅ DONE
 
 **Goal:** Hermes can create a complete site configuration from a user description, gated by plan-then-execute approval.
 
@@ -1229,7 +1235,7 @@ Do NOT modify files outside your scope. Commit to your branch only.
 
 ---
 
-### Phase 1D: Diagnostic Tools + Raw Read Endpoint
+### Phase 1D: Diagnostic Tools + Raw Read Endpoint ✅ DONE
 
 **Goal:** Hermes can probe the network, read raw Modbus registers, and investigate issues without a pre-configured device.
 
@@ -1242,7 +1248,7 @@ Do NOT modify files outside your scope. Commit to your branch only.
 
 ---
 
-### Phase 1E: Sanitization, Tracing, and Learning Signal
+### Phase 1E: Sanitization, Tracing, and Learning Signal ✅ DONE
 
 **Goal:** Production-grade session audit trail, data hygiene, and the foundation for skill learning.
 

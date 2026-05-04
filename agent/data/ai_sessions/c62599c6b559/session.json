@@ -1,0 +1,35 @@
+{
+  "session_id": "c62599c6b559",
+  "state": "chatting",
+  "turn_count": 1,
+  "tool_call_counts": {},
+  "created_entities": {
+    "gateway_ids": [],
+    "device_ids": [],
+    "schema_ids": [],
+    "table_ids": [],
+    "job_ids": [],
+    "db_target_ids": []
+  },
+  "staged_plan": null,
+  "checkpoint": null,
+  "tool_events": [
+    {
+      "timestamp": "2026-04-18T18:40:02.161738+00:00",
+      "tool_name": "read_config",
+      "args": {},
+      "result_summary": "{\"gateways\": 32, \"devices\": 332, \"schemas\": 21, \"tables\": 346, \"jobs\": 18}",
+      "error_type": null,
+      "duration_ms": 0,
+      "tier": "read"
+    }
+  ],
+  "learning_signal": null,
+  "iteration_count": 1,
+  "captured_readings": [],
+  "plan_rejection_count": 0,
+  "created_by": null,
+  "approved_by": null,
+  "created_at": "2026-04-18T18:39:57.699641+00:00",
+  "updated_at": "2026-04-18T18:40:06.278275+00:00"
+}

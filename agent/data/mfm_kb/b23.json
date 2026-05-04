@@ -1,0 +1,410 @@
+{
+  "manufacturer": "ABB",
+  "model": "B23",
+  "protocol": "modbus_rtu",
+  "byte_order": "big_endian",
+  "identification": {
+    "register_address": 35168,
+    "expected_value": "B23",
+    "description": "Type designation (6 regs ASCII)"
+  },
+  "registers": [
+    {
+      "address": 23296,
+      "count": 2,
+      "parameter": "voltage_l1n",
+      "data_type": "uint32",
+      "unit": "V",
+      "scale": 0.1,
+      "access": "read",
+      "typical_range": [
+        180.0,
+        280.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 23298,
+      "count": 2,
+      "parameter": "voltage_l2n",
+      "data_type": "uint32",
+      "unit": "V",
+      "scale": 0.1,
+      "access": "read",
+      "typical_range": [
+        180.0,
+        280.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 23300,
+      "count": 2,
+      "parameter": "voltage_l3n",
+      "data_type": "uint32",
+      "unit": "V",
+      "scale": 0.1,
+      "access": "read",
+      "typical_range": [
+        180.0,
+        280.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 23302,
+      "count": 2,
+      "parameter": "voltage_l12",
+      "data_type": "uint32",
+      "unit": "V",
+      "scale": 0.1,
+      "access": "read",
+      "typical_range": [
+        380.0,
+        440.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 23304,
+      "count": 2,
+      "parameter": "voltage_l23",
+      "data_type": "uint32",
+      "unit": "V",
+      "scale": 0.1,
+      "access": "read",
+      "typical_range": [
+        380.0,
+        440.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 23306,
+      "count": 2,
+      "parameter": "voltage_l31",
+      "data_type": "uint32",
+      "unit": "V",
+      "scale": 0.1,
+      "access": "read",
+      "typical_range": [
+        380.0,
+        440.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 23308,
+      "count": 2,
+      "parameter": "current_l1",
+      "data_type": "uint32",
+      "unit": "A",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [
+        0.0,
+        6000.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 23310,
+      "count": 2,
+      "parameter": "current_l2",
+      "data_type": "uint32",
+      "unit": "A",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [
+        0.0,
+        6000.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 23312,
+      "count": 2,
+      "parameter": "current_l3",
+      "data_type": "uint32",
+      "unit": "A",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [
+        0.0,
+        6000.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 23314,
+      "count": 2,
+      "parameter": "current_neutral",
+      "data_type": "uint32",
+      "unit": "A",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 23316,
+      "count": 2,
+      "parameter": "active_power_total",
+      "data_type": "int32",
+      "unit": "W",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 23318,
+      "count": 2,
+      "parameter": "active_power_l1",
+      "data_type": "int32",
+      "unit": "W",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 23320,
+      "count": 2,
+      "parameter": "active_power_l2",
+      "data_type": "int32",
+      "unit": "W",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 23322,
+      "count": 2,
+      "parameter": "active_power_l3",
+      "data_type": "int32",
+      "unit": "W",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 23324,
+      "count": 2,
+      "parameter": "reactive_power_total",
+      "data_type": "int32",
+      "unit": "var",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 23326,
+      "count": 2,
+      "parameter": "reactive_power_l1",
+      "data_type": "int32",
+      "unit": "var",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 23328,
+      "count": 2,
+      "parameter": "reactive_power_l2",
+      "data_type": "int32",
+      "unit": "var",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 23330,
+      "count": 2,
+      "parameter": "reactive_power_l3",
+      "data_type": "int32",
+      "unit": "var",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 23332,
+      "count": 2,
+      "parameter": "apparent_power_total",
+      "data_type": "int32",
+      "unit": "VA",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 23334,
+      "count": 2,
+      "parameter": "apparent_power_l1",
+      "data_type": "int32",
+      "unit": "VA",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 23336,
+      "count": 2,
+      "parameter": "apparent_power_l2",
+      "data_type": "int32",
+      "unit": "VA",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 23338,
+      "count": 2,
+      "parameter": "apparent_power_l3",
+      "data_type": "int32",
+      "unit": "VA",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 23340,
+      "count": 1,
+      "parameter": "frequency",
+      "data_type": "uint16",
+      "unit": "Hz",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [
+        49.0,
+        51.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 23354,
+      "count": 1,
+      "parameter": "power_factor_total",
+      "data_type": "int16",
+      "unit": "",
+      "scale": 0.001,
+      "access": "read",
+      "typical_range": [
+        -1.0,
+        1.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 23355,
+      "count": 1,
+      "parameter": "power_factor_l1",
+      "data_type": "int16",
+      "unit": "",
+      "scale": 0.001,
+      "access": "read",
+      "typical_range": [
+        -1.0,
+        1.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 23356,
+      "count": 1,
+      "parameter": "power_factor_l2",
+      "data_type": "int16",
+      "unit": "",
+      "scale": 0.001,
+      "access": "read",
+      "typical_range": [
+        -1.0,
+        1.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 23357,
+      "count": 1,
+      "parameter": "power_factor_l3",
+      "data_type": "int16",
+      "unit": "",
+      "scale": 0.001,
+      "access": "read",
+      "typical_range": [
+        -1.0,
+        1.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 20480,
+      "count": 4,
+      "parameter": "energy_active_import",
+      "data_type": "uint32",
+      "unit": "kWh",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 20484,
+      "count": 4,
+      "parameter": "energy_active_export",
+      "data_type": "uint32",
+      "unit": "kWh",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 20492,
+      "count": 4,
+      "parameter": "energy_reactive_import",
+      "data_type": "uint32",
+      "unit": "kVARh",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 20504,
+      "count": 4,
+      "parameter": "energy_apparent_import",
+      "data_type": "uint32",
+      "unit": "kVAh",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    }
+  ],
+  "quirks": [
+    "Default baud is 4800, NOT 9600. Default parity is Even.",
+    "Uses SCALED INTEGERS, not float32. Apply scale factor to raw register values.",
+    "Power is in Watts (W), not kilowatts (kW). Energy is in kWh with 0.01 resolution.",
+    "Frequency and PF are single 16-bit registers (count=1), not 32-bit.",
+    "Energy accumulators are 64-bit (4 registers). Must read all 4 and combine.",
+    "'Steel' variants (B23 112-100) do NOT support reverse/export energy. 'Silver' variants (B23 312-100) do.",
+    "B24 model uses external CT (up to 1000A) but has the same register map.",
+    "Do NOT add 40001 offset — use raw hex addresses with FC 0x03."
+  ],
+  "source_document": "abb_b23_b24_user_manual_2CMC485003M0201.pdf",
+  "extraction_date": "2026-04-13",
+  "verified_by_engineer": true,
+  "version": 2
+}

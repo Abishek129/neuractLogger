@@ -1,0 +1,9 @@
+{
+  "test_train": {
+    "model_version": 1,
+    "load_class": "unknown",
+    "trained_at": "2026-04-14T08:56:30.365060+00:00",
+    "samples": 50,
+    "threshold_97": 4.213281849908549
+  }
+}

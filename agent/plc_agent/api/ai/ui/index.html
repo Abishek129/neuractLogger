@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LoggerFast AI</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
+</head>
+<body>
+    <!-- Login overlay -->
+    <div id="login-overlay">
+        <div id="login-card">
+            <h2>LoggerFast AI</h2>
+            <p>Sign in to continue</p>
+            <form id="login-form" autocomplete="on">
+                <input type="text" id="login-user" placeholder="Username" autocomplete="username" required />
+                <input type="password" id="login-pass" placeholder="Password" autocomplete="current-password" required />
+                <button type="submit" id="login-btn">Sign In</button>
+                <div id="login-error"></div>
+            </form>
+        </div>
+    </div>
+
+    <header id="header">
+        <h1>LoggerFast AI</h1>
+        <div id="session-info">
+            <span id="session-id-badge">No session</span>
+            <span id="state-badge" class="state-dot" data-state="created"></span>
+        </div>
+        <button id="btn-new-session">+ New Session</button>
+    </header>
+
+    <div id="layout">
+        <aside id="sidebar">
+            <div class="sidebar-section">
+                <h3 class="accordion-toggle active" data-target="sessions-panel">Sessions</h3>
+                <div id="sessions-panel" class="accordion-body open">
+                    <div id="session-list"></div>
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <h3 class="accordion-toggle" data-target="kb-panel">KB Models</h3>
+                <div id="kb-panel" class="accordion-body">
+                    <div id="kb-list"></div>
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <h3 class="accordion-toggle" data-target="skills-panel">Skills</h3>
+                <div id="skills-panel" class="accordion-body">
+                    <div id="skills-list"></div>
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <h3 class="accordion-toggle" data-target="trace-panel">Trace</h3>
+                <div id="trace-panel" class="accordion-body">
+                    <div id="trace-content"></div>
+                </div>
+            </div>
+        </aside>
+
+        <main id="chat-panel">
+            <div id="messages"></div>
+            <div id="chat-input-row">
+                <textarea id="chat-input" placeholder="Type a message..." rows="2"></textarea>
+                <button id="btn-send">Send</button>
+            </div>
+        </main>
+
+        <section id="pipeline-panel">
+            <h3>Alerts</h3>
+            <div id="notifications"></div>
+            <h3 style="margin-top:12px">Pipeline</h3>
+            <div id="stages"></div>
+            <div id="plan-card" class="hidden"></div>
+            <div id="pipeline-errors"></div>
+        </section>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>

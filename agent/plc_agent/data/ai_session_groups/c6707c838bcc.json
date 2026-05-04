@@ -1,0 +1,17 @@
+{
+  "group_id": "c6707c838bcc",
+  "name": "Test Site",
+  "session_ids": [
+    "sess_a"
+  ],
+  "scopes": {
+    "sess_a": "Building A"
+  },
+  "entity_locks": {
+    "device:mfm_002": "sess_b",
+    "device:mfm_001": "sess_b"
+  },
+  "lock_count": 2,
+  "created_at": "2026-04-15T07:51:49.908055+00:00",
+  "status": "active"
+}

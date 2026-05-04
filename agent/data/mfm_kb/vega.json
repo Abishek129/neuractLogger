@@ -1,0 +1,434 @@
+{
+  "manufacturer": "Larsen & Toubro",
+  "model": "Vega",
+  "protocol": "modbus_rtu",
+  "byte_order": "big_endian",
+  "identification": null,
+  "registers": [
+    {
+      "address": 0,
+      "count": 2,
+      "parameter": "voltage_l1n",
+      "data_type": "int32",
+      "unit": "V",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [
+        180.0,
+        280.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 2,
+      "count": 2,
+      "parameter": "voltage_l2n",
+      "data_type": "int32",
+      "unit": "V",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [
+        180.0,
+        280.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 4,
+      "count": 2,
+      "parameter": "voltage_l3n",
+      "data_type": "int32",
+      "unit": "V",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [
+        180.0,
+        280.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 6,
+      "count": 2,
+      "parameter": "current_l1",
+      "data_type": "int32",
+      "unit": "A",
+      "scale": 0.001,
+      "access": "read",
+      "typical_range": [
+        0.0,
+        6000.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 8,
+      "count": 2,
+      "parameter": "current_l2",
+      "data_type": "int32",
+      "unit": "A",
+      "scale": 0.001,
+      "access": "read",
+      "typical_range": [
+        0.0,
+        6000.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 10,
+      "count": 2,
+      "parameter": "current_l3",
+      "data_type": "int32",
+      "unit": "A",
+      "scale": 0.001,
+      "access": "read",
+      "typical_range": [
+        0.0,
+        6000.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 12,
+      "count": 2,
+      "parameter": "active_power_l1",
+      "data_type": "int32",
+      "unit": "kW",
+      "scale": 0.0001,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 15,
+      "count": 2,
+      "parameter": "active_power_l2",
+      "data_type": "int32",
+      "unit": "kW",
+      "scale": 0.0001,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 18,
+      "count": 2,
+      "parameter": "active_power_l3",
+      "data_type": "int32",
+      "unit": "kW",
+      "scale": 0.0001,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 21,
+      "count": 2,
+      "parameter": "reactive_power_l1",
+      "data_type": "int32",
+      "unit": "kVAR",
+      "scale": 0.0001,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 24,
+      "count": 2,
+      "parameter": "reactive_power_l2",
+      "data_type": "int32",
+      "unit": "kVAR",
+      "scale": 0.0001,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 27,
+      "count": 2,
+      "parameter": "reactive_power_l3",
+      "data_type": "int32",
+      "unit": "kVAR",
+      "scale": 0.0001,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 30,
+      "count": 2,
+      "parameter": "apparent_power_l1",
+      "data_type": "int32",
+      "unit": "kVA",
+      "scale": 0.0001,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 33,
+      "count": 2,
+      "parameter": "apparent_power_l2",
+      "data_type": "int32",
+      "unit": "kVA",
+      "scale": 0.0001,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 36,
+      "count": 2,
+      "parameter": "apparent_power_l3",
+      "data_type": "int32",
+      "unit": "kVA",
+      "scale": 0.0001,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 39,
+      "count": 2,
+      "parameter": "power_factor_l1",
+      "data_type": "int32",
+      "unit": "",
+      "scale": 0.001,
+      "access": "read",
+      "typical_range": [
+        -1.0,
+        1.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 41,
+      "count": 2,
+      "parameter": "power_factor_l2",
+      "data_type": "int32",
+      "unit": "",
+      "scale": 0.001,
+      "access": "read",
+      "typical_range": [
+        -1.0,
+        1.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 43,
+      "count": 2,
+      "parameter": "power_factor_l3",
+      "data_type": "int32",
+      "unit": "",
+      "scale": 0.001,
+      "access": "read",
+      "typical_range": [
+        -1.0,
+        1.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 45,
+      "count": 2,
+      "parameter": "active_power_total",
+      "data_type": "int32",
+      "unit": "kW",
+      "scale": 0.0001,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 48,
+      "count": 2,
+      "parameter": "reactive_power_total",
+      "data_type": "int32",
+      "unit": "kVAR",
+      "scale": 0.0001,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 51,
+      "count": 2,
+      "parameter": "apparent_power_total",
+      "data_type": "int32",
+      "unit": "kVA",
+      "scale": 0.0001,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 54,
+      "count": 2,
+      "parameter": "power_factor_total",
+      "data_type": "int32",
+      "unit": "",
+      "scale": 0.001,
+      "access": "read",
+      "typical_range": [
+        -1.0,
+        1.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 56,
+      "count": 2,
+      "parameter": "frequency",
+      "data_type": "int32",
+      "unit": "Hz",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [
+        49.0,
+        51.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 58,
+      "count": 2,
+      "parameter": "voltage_l12",
+      "data_type": "int32",
+      "unit": "V",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [
+        380.0,
+        440.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 60,
+      "count": 2,
+      "parameter": "voltage_l23",
+      "data_type": "int32",
+      "unit": "V",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [
+        380.0,
+        440.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 62,
+      "count": 2,
+      "parameter": "voltage_l31",
+      "data_type": "int32",
+      "unit": "V",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [
+        380.0,
+        440.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 64,
+      "count": 2,
+      "parameter": "voltage_ln_avg",
+      "data_type": "int32",
+      "unit": "V",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [
+        220.0,
+        254.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 66,
+      "count": 2,
+      "parameter": "current_avg",
+      "data_type": "int32",
+      "unit": "A",
+      "scale": 0.001,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 68,
+      "count": 2,
+      "parameter": "thd_voltage_l1n",
+      "data_type": "int32",
+      "unit": "%",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 70,
+      "count": 2,
+      "parameter": "thd_voltage_l2n",
+      "data_type": "int32",
+      "unit": "%",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 72,
+      "count": 2,
+      "parameter": "thd_voltage_l3n",
+      "data_type": "int32",
+      "unit": "%",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 111,
+      "count": 3,
+      "parameter": "energy_active_import",
+      "data_type": "int32",
+      "unit": "kWh",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 108,
+      "count": 3,
+      "parameter": "energy_apparent_import",
+      "data_type": "int32",
+      "unit": "kVAh",
+      "scale": 0.01,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    }
+  ],
+  "quirks": [
+    "Uses Function Code 0x04 (Input Registers), NOT 0x03 (Holding Registers) for measurement data.",
+    "Address numbering in manual uses 30001-convention: 30001 = input register 0. Subtract 30001 for raw Modbus address.",
+    "Each power parameter has a companion 'unit' register (scale indicator: 0=base, 1=kilo, 2=mega). Check unit register for correct interpretation.",
+    "Values are 2's complement for negative numbers.",
+    "Uses scaled integers, NOT float32. Apply scale factor to raw register values.",
+    "L&T uses R/Y/B phase naming: R=Red=L1, Y=Yellow=L2, B=Blue=L3.",
+    "No model ID register — identification by register pattern match only.",
+    "May be labeled 'WM330' at some sites — same meter, different distributor designation.",
+    "Only Models B and C have RS-485 Modbus. Model A has no communications.",
+    "Response timeout: recommended 400ms minimum.",
+    "Default: 9600 baud, Even parity, slave address 1."
+  ],
+  "source_document": "lt_vega_manual_4D060193.pdf",
+  "extraction_date": "2026-04-13",
+  "verified_by_engineer": true,
+  "version": 2
+}

@@ -13,7 +13,12 @@ from ..keycloak_admin import (
     get_client_uuid,
     get_client_role,
     assign_client_role_to_user,
+    get_realm_role,
+    assign_realm_role_to_user,
+    remove_realm_role_from_user,
+    get_user_realm_roles,
     user_login,
+    user_refresh,
 )
 from ..keycloak_config import KEYCLOAK_ADMIN_CLIENT_ID
 
@@ -96,6 +101,35 @@ async def login(payload: Dict[str, Any]):
     return token_data
 
 
+@router.post("/refresh")
+async def refresh(payload: Dict[str, Any]):
+    """Refresh an access token using a refresh_token. Public endpoint.
+
+    Body: {"refresh_token": "..."}
+    """
+    refresh_token = (payload.get("refresh_token") or "").strip()
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="refresh_token is required",
+        )
+
+    try:
+        token_data = await user_refresh(refresh_token)
+    except KeycloakAdminError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token refresh failed — please log in again",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"error": "keycloak_error", "message": str(e)},
+        )
+
+    return token_data
+
+
 @router.post("/assign-role/{username}")
 async def assign_role(username: str):
     """Assign the neuract-admin client role to a user. Public endpoint (mirrors Django)."""
@@ -130,3 +164,96 @@ async def assign_role(username: str):
         "client": KEYCLOAK_ADMIN_CLIENT_ID,
         "role": "neuract-admin",
     }
+
+
+# ---- Realm role management (logger_read / logger_write) --------------------
+
+LOGGER_ROLES = {"logger_read", "logger_write"}
+
+
+@router.get("/roles/{username}")
+async def get_roles(username: str):
+    """Get realm roles assigned to a user."""
+    try:
+        token = await get_service_account_token()
+        user_id = await get_user_id_by_username(token, username)
+        if not user_id:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        roles = await get_user_realm_roles(token, user_id)
+        role_names = [r["name"] for r in roles]
+    except HTTPException:
+        raise
+    except KeycloakAdminError as e:
+        raise HTTPException(status_code=400, detail={"error": "keycloak_error", "message": str(e)})
+
+    return {
+        "username": username,
+        "roles": role_names,
+        "logger_read": "logger_read" in role_names,
+        "logger_write": "logger_write" in role_names,
+    }
+
+
+@router.post("/roles/{username}")
+async def assign_realm_role(username: str, payload: Dict[str, Any]):
+    """Assign a logger realm role to a user.
+
+    Body: {"role": "logger_read"} or {"role": "logger_write"}
+    """
+    role_name = (payload.get("role") or "").strip()
+    if role_name not in LOGGER_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid role '{role_name}'. Must be one of: {', '.join(sorted(LOGGER_ROLES))}",
+        )
+
+    try:
+        token = await get_service_account_token()
+        user_id = await get_user_id_by_username(token, username)
+        if not user_id:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        role_repr = await get_realm_role(token, role_name)
+        if not role_repr:
+            raise HTTPException(status_code=404, detail=f"Realm role '{role_name}' not found in Keycloak")
+
+        await assign_realm_role_to_user(token, user_id, role_repr)
+    except HTTPException:
+        raise
+    except KeycloakAdminError as e:
+        raise HTTPException(status_code=400, detail={"error": "keycloak_error", "message": str(e)})
+
+    return {"ok": True, "username": username, "role": role_name, "action": "assigned"}
+
+
+@router.delete("/roles/{username}")
+async def remove_realm_role(username: str, payload: Dict[str, Any]):
+    """Remove a logger realm role from a user.
+
+    Body: {"role": "logger_read"} or {"role": "logger_write"}
+    """
+    role_name = (payload.get("role") or "").strip()
+    if role_name not in LOGGER_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid role '{role_name}'. Must be one of: {', '.join(sorted(LOGGER_ROLES))}",
+        )
+
+    try:
+        token = await get_service_account_token()
+        user_id = await get_user_id_by_username(token, username)
+        if not user_id:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        role_repr = await get_realm_role(token, role_name)
+        if not role_repr:
+            raise HTTPException(status_code=404, detail=f"Realm role '{role_name}' not found in Keycloak")
+
+        await remove_realm_role_from_user(token, user_id, role_repr)
+    except HTTPException:
+        raise
+    except KeycloakAdminError as e:
+        raise HTTPException(status_code=400, detail={"error": "keycloak_error", "message": str(e)})
+
+    return {"ok": True, "username": username, "role": role_name, "action": "removed"}

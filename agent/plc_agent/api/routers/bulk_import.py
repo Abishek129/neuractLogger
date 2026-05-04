@@ -39,6 +39,7 @@ def bulk_import_devices(payload: Dict[str, Any]) -> Dict[str, Any]:
             unit = row.get("unit")
             connections = (row.get("connections") or "").strip()
             mqtt_gateway = (row.get("mqtt_gateway") or "").strip()
+            order = (row.get("order") or "").strip().upper()
 
             # Validate required fields
             if not name:
@@ -169,6 +170,10 @@ def bulk_import_devices(payload: Dict[str, Any]) -> Dict[str, Any]:
             # Store MQTT logical gateway label (e.g. "GW-01") for filtering MQTT payloads
             if mqtt_gateway:
                 device_payload["params"]["mqtt_gateway"] = mqtt_gateway
+
+            # Store Modbus byte order (ABCD/CDAB/BADC/DCBA); defaults to ABCD (big endian)
+            if protocol == "modbus" and order in ("ABCD", "CDAB", "BADC", "DCBA"):
+                device_payload["params"]["order"] = order
 
             # Connection test before creating (mirrors POST /devices)
             extra = {}

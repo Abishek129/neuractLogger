@@ -395,6 +395,24 @@ def init() -> None:
             # Constraint already exists or not supported
             pass
 
+        # Phase 3D — SLD topology inference
+        c.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS app_device_topology (
+                    device_id TEXT PRIMARY KEY,
+                    parent_device_id TEXT,
+                    hierarchy_level TEXT NOT NULL DEFAULT 'unknown',
+                    load_pattern TEXT NOT NULL DEFAULT 'unknown',
+                    confidence REAL NOT NULL DEFAULT 0.0,
+                    gateway_id TEXT,
+                    inferred_at TEXT,
+                    snapshot_count INTEGER DEFAULT 0
+                )
+                """
+            )
+        )
+
 # ---------- Schemas ----------
 def load_schemas() -> List[Dict[str, Any]]:
     with _conn() as c:
@@ -1234,7 +1252,7 @@ def load_job_runs(job_id: str, frm: Optional[str] = None, to: Optional[str] = No
 
 # ---------- Notifications ----------
 
-NOTIFICATION_TYPES = {"job", "trigger", "migration_failed", "migration_success", "slow_query", "performance_summary"}
+NOTIFICATION_TYPES = {"job", "trigger", "migration_failed", "migration_success", "slow_query", "performance_summary", "prediction"}
 
 
 def create_notification(notif_type: str, message: str, user: str) -> Dict[str, Any]:

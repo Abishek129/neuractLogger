@@ -42,6 +42,10 @@ async def get_claims(
     if not token:
         token = extract_bearer_token(request.headers.get("authorization"))
 
+    # Fallback: X-Agent-Token header (used by desktop frontend client.js)
+    if not token:
+        token = request.headers.get("x-agent-token") or None
+
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

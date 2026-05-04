@@ -1,0 +1,8 @@
+{
+  "pm5110": {
+    "last_retrain": "2026-04-19T14:03:32.486877+00:00",
+    "model_version": 6,
+    "threshold_97": 0.2200663601248857,
+    "synthetic_samples": 2000
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "session_id": "d3ccf1cb803b",
+  "state": "applying",
+  "turn_count": 0,
+  "tool_call_counts": {},
+  "created_entities": {
+    "gateway_ids": [],
+    "device_ids": [],
+    "schema_ids": [],
+    "table_ids": [],
+    "job_ids": [],
+    "db_target_ids": []
+  },
+  "staged_plan": {
+    "steps": [
+      {
+        "action": "create_gateway",
+        "params": {
+          "name": "AI-Test-GW",
+          "host": "10.10.5.1"
+        }
+      },
+      {
+        "action": "create_device",
+        "params": {
+          "name": "AI-Test-Dev",
+          "protocol": "modbus"
+        }
+      },
+      {
+        "action": "create_schema",
+        "params": {
+          "name": "AI-Test-Schema",
+          "fields": [
+            {
+              "key": "V",
+              "type": "float32"
+            }
+          ]
+        }
+      },
+      {
+        "action": "create_table",
+        "params": {
+          "names": [
+            "ai_test_tbl"
+          ]
+        }
+      }
+    ],
+    "summary": {
+      "gateways": 1,
+      "devices": 1,
+      "schemas": 1,
+      "tables": 1,
+      "mappings": 0,
+      "jobs": 0
+    }
+  },
+  "checkpoint": null,
+  "tool_events": [],
+  "learning_signal": null,
+  "iteration_count": 0,
+  "captured_readings": [],
+  "plan_rejection_count": 0,
+  "created_by": "rohith",
+  "approved_by": "rohith",
+  "created_at": "2026-04-19T11:01:22.302848+00:00",
+  "updated_at": "2026-04-19T11:01:23.186934+00:00"
+}

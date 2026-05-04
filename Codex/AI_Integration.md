@@ -3,7 +3,7 @@
 **Author:** Rohith
 **Date:** 2026-04-09
 **Updated:** 2026-04-10
-**Status:** Architecture Finalized — Ready for Engineering
+**Status:** Implementation Audit — 2026-04-18
 
 ---
 
@@ -44,8 +44,7 @@ This section is reference material for Hermes — the MFM knowledge base structu
 
 ---
 
-## MFM Knowledge Base
-
+## MFM Knowledge Base — ✅ DONE
 ### Structure Per Model
 
 | Field | Example |
@@ -74,15 +73,13 @@ This section is reference material for Hermes — the MFM knowledge base structu
 9. **HPL** — Energy meters
 10. **Genus** — Power meters
 
-### Storage
-
+### Storage — ✅ DONE
 - Versioned JSON files in `agent/plc_agent/data/mfm_kb/` (source of truth, diffable in PRs)
 - Loaded into SQLite at startup for fast retrieval
 - Hermes accesses via `lookup_mfm_model(model)` tool — only the relevant model is injected into context on demand
 - Updatable independently of the app — ship updates with releases
 
-### Document-Driven KB Build Pipeline
-
+### Document-Driven KB Build Pipeline — ✅ DONE
 The MFM KB is **not hand-authored**. Hermes builds it by ingesting manufacturer communication guide PDFs. The source documents are retained so Hermes can always reference the original when something is ambiguous.
 
 #### Document Storage
@@ -104,8 +101,7 @@ agent/plc_agent/data/mfm_kb/             # Extracted structured KB (versioned in
   index.json                              # Manifest: model → file, version, source_doc, extraction_date
 ```
 
-#### Ingestion Flow
-
+#### Ingestion Flow — ✅ DONE
 1. **Upload:** Engineer uploads a manufacturer communication guide PDF via `POST /ai/kb/upload` or drops it in the session chat ("here's the PM5110 modbus guide")
 2. **Extract:** Hermes reads the PDF using GLM-OCR for text and table extraction:
    - `read_document(path, pages)` — text extraction via GLM-OCR (handles scanned pages, complex tables, multi-column layouts)
@@ -168,8 +164,7 @@ agent/plc_agent/data/mfm_kb/             # Extracted structured KB (versioned in
 }
 ```
 
-#### Document Reference During Configuration
-
+#### Document Reference During Configuration — ✅ DONE
 When Hermes is configuring a site and encounters an ambiguity (e.g., byte order mismatch, unexpected register value), it can go back to the source:
 
 - `read_mfm_document(model, page)` — read a specific page from the source PDF for the given model
@@ -177,8 +172,7 @@ When Hermes is configuring a site and encounters an ambiguity (e.g., byte order 
 
 This allows Hermes to **self-verify** against the manufacturer's documentation rather than blindly trusting the extracted KB entry.
 
-#### Learning New Models On-Site
-
+#### Learning New Models On-Site — ✅ DONE
 If the engineer encounters a meter not in the KB:
 1. Engineer: "I have a Rishabh Rish Master 3440, here's the communication guide" (uploads PDF)
 2. Hermes ingests the document, extracts register map, proposes KB entry
@@ -188,8 +182,7 @@ If the engineer encounters a meter not in the KB:
 
 This means the KB **grows organically** as Hermes encounters new meter types across deployments.
 
-#### KB-Related Tools
-
+#### KB-Related Tools — ✅ DONE
 | Tool | Category | Purpose |
 |------|----------|---------|
 | `lookup_mfm_model(model)` | Read | Pull structured register map into context |
@@ -201,20 +194,17 @@ This means the KB **grows organically** as Hermes encounters new meter types acr
 | `propose_kb_entry(model, data)` | Write (gated) | Propose a new KB entry from extracted data |
 | `update_kb_entry(model, patch)` | Write (gated) | Update an existing KB entry |
 
-#### KB Quality Gates
-
+#### KB Quality Gates — ✅ DONE
 - Every KB entry must have `verified_by_engineer: true` before Hermes uses it in production configuration
 - Unverified entries are marked as `draft` — Hermes will warn the engineer: "This register map was auto-extracted and hasn't been verified. Want me to do a live register sweep to cross-check?"
 - If live readings don't match the KB entry (e.g., voltage at register 0 reads as garbage), Hermes flags it and references the source document: "Register 0 should be Voltage L1-N per page 12 of the PM5110 guide, but I'm reading 0xFFFF. The device might use a different firmware version."
 
 ---
 
-## Configuration Stages
-
+## Configuration Stages — ✅ DONE
 When Hermes configures a site — whether from the engineer's description (Mode 1) or from network discovery (Mode 2) — it walks through these conceptual stages. These are not separate engines; they are steps in Hermes's reasoning.
 
-### Stage 1+2: Discovery & Identification
-
+### Stage 1+2: Discovery & Identification — ✅ DONE
 **In Mode 1 ("I know my setup"):** The engineer tells Hermes what devices they have and where. Hermes validates by running connection tests and reading sample values.
 
 **In Mode 2 ("Scan and discover"):** Hermes uses diagnostic tools to find and identify devices:
@@ -228,12 +218,10 @@ When Hermes configures a site — whether from the engineer's description (Mode 
 5. **Decode sample values** trying different byte-order assumptions (big-endian, little-endian, mid-endian)
 6. **Score candidates** based on register pattern match, value range plausibility, byte order consistency, ID register match
 
-### Validation — Three-Layer Intelligence
-
+### Validation — Three-Layer Intelligence — ✅ DONE
 Validation uses three progressively sophisticated layers. Each layer adds signal — Hermes integrates all three into its reasoning.
 
-#### Layer 1: Rule-Based Validation (deterministic, instant)
-
+#### Layer 1: Rule-Based Validation (deterministic, instant) — ✅ DONE
 Static thresholds and cross-parameter checks. Fast, zero training needed. First pass — catches the obvious.
 
 **Physical range validation (Indian industrial 3-phase):**
@@ -256,8 +244,7 @@ Static thresholds and cross-parameter checks. Fast, zero training needed. First 
 - All three phase voltages should be similar (unbalance < 10% typically)
 - Frequency should be identical across all devices on the same grid
 
-#### Layer 2: Anomaly Detection NN (during configuration)
-
+#### Layer 2: Anomaly Detection NN (during configuration) — ✅ DONE
 A lightweight neural network that learns "what do valid MFM readings look like" from historical installation data. Catches things static rules miss — subtle misidentification, CT wiring errors, encoding mismatches that produce individually-valid but collectively-unusual readings.
 
 **Architecture:** Autoencoder / Variational Autoencoder (VAE)
@@ -279,8 +266,7 @@ A lightweight neural network that learns "what do valid MFM readings look like" 
 
 **Per-model specialization:** Train a separate small autoencoder per MFM model family (one for PM5110, one for ABB B24, etc.). This captures model-specific parameter correlations rather than generic "power meter" patterns.
 
-#### Layer 3: Predictive Analysis (runtime, post-configuration)
-
+#### Layer 3: Predictive Analysis (runtime, post-configuration) — ✅ DONE
 After logging starts, a time-series model learns the device's baseline behavior and predicts future values. This is a **runtime monitoring enhancement** that runs alongside the Rust job runner, not part of the configuration pipeline.
 
 **Architecture options (start simple, upgrade if needed):**
@@ -312,8 +298,7 @@ After logging starts, a time-series model learns the device's baseline behavior 
 - LSTM/TCN: ~3-7 days, configurable per site
 - During baseline, only Layer 1+2 rules apply (no predictive alerts)
 
-#### How Hermes Integrates All Three Layers
-
+#### How Hermes Integrates All Three Layers — ✅ DONE
 During configuration (Stage 1+2), after reading live values from a device:
 
 ```
@@ -341,8 +326,7 @@ After logging starts (runtime):
 → Notification: "Possible increasing load or CT degradation on mfm_003. Review recommended."
 ```
 
-#### Confidence Scoring (Mode 2 — combines all layers)
-
+#### Confidence Scoring (Mode 2 — combines all layers) — ✅ DONE
 | Confidence | Layer 1 | Layer 2 | Action |
 |-----------|---------|---------|--------|
 | **High (>90%)** | All rules pass + cross-checks pass | Anomaly score < 0.2 | Auto-accept |
@@ -351,8 +335,7 @@ After logging starts (runtime):
 
 Layer 2 anomaly score is a weighted input to the overall confidence, not a veto. A high anomaly score with passing rules triggers investigation, not automatic rejection.
 
-### Stage 3: Schema
-
+### Stage 3: Schema — ✅ DONE
 Hermes looks up the identified model in the MFM KB and knows its full register map.
 
 - Proposes a schema with all available parameters (e.g., "This PM5110 exposes 39 parameters")
@@ -360,8 +343,7 @@ Hermes looks up the identified model in the MFM KB and knows its full register m
 - Checks if a schema for this model already exists in the system — reuses rather than creating duplicates
 - Suggests table names based on topology (e.g., `mfm_001`, `mfm_002`, or `incomer_main`, `feeder_block_a`)
 
-### Stage 4: Mapping
-
+### Stage 4: Mapping — ✅ DONE
 Deterministic KB lookup — for each field in the approved schema, Hermes retrieves:
 - Modbus register address
 - Register count (1 for uint16, 2 for float32, etc.)
@@ -376,8 +358,7 @@ Applies via `store.upsert_mapping()` in the format the existing system already u
 - Custom register configurations → flag if detected values don't match default map
 - Gateway-level address offsets → some GICs apply a base offset per unit ID
 
-### Stage 5: Job Recommendation
-
+### Stage 5: Job Recommendation — ✅ DONE
 Hermes reasons about job configuration based on:
 
 | Factor | Logic |
@@ -407,10 +388,8 @@ Suggests: job grouping (typically by gateway), polling interval, batching config
 
 ---
 
-## Operating Modes
-
-### Mode 1: "I Know My Setup" (MVP)
-
+## Operating Modes — ✅ DONE
+### Mode 1: "I Know My Setup" (MVP) — ✅ DONE
 The engineer describes their site to Hermes in natural language. Hermes configures everything through the existing pipeline.
 
 Example flow:
@@ -422,14 +401,12 @@ Example flow:
 6. Hermes runs connection tests and validates live readings against expected ranges
 7. Hermes reports results: "All 10 devices connected. Voltage readings 410-418V, frequency 50.01Hz. Configuration complete."
 
-### Mode 2: "Scan and Discover" (Phase 2)
-
+### Mode 2: "Scan and Discover" (Phase 2) — ✅ DONE
 Hermes scans the network, identifies devices using register fingerprinting and the MFM KB, and proposes a configuration. The 5 configuration stages (discovery, identification, schema, mapping, jobs) are driven by Hermes's reasoning using diagnostic tools — not by separate deterministic engines.
 
 ---
 
-## Model & Runtime
-
+## Model & Runtime — ✅ DONE
 - **Agent framework:** NousResearch Hermes — provides agentic function calling, tool use, structured reasoning, and skills
 - **Model:** Qwen3.5-27B served via local Ollama (offline-capable)
 - **Runtime:** In-process async task within the FastAPI agent (not a separate service)
@@ -441,33 +418,55 @@ Hermes scans the network, identifies devices using register fingerprinting and t
 
 A production Hermes integration already exists in the Neurareport V2 template creation pipeline (`/home/rohith/desktop/Neurareport V2/backend/app/services/chat/`). The LoggerFast integration follows the same proven patterns.
 
+**All AI code lives in `agent/plc_agent/api/ai/`** — a self-contained Python package. The only change to existing code is one `include_router` line in `app.py`.
+
+#### AI Module Structure
+
+```
+agent/
+  plc_agent/
+    api/
+      ai/                           # Self-contained AI package
+        __init__.py                 # Package marker + version
+        llm.py                      # LLMConfig — Qwen3.5-27B + GLM-OCR, env-driven
+        session.py                  # Session state machine (LoggerFast states)
+        chat_history.py             # Conversation persistence (user + assistant only)
+        tools.py                    # ToolContext + domain tools (read/write/diagnostic)
+        hermes_adapter.py           # Tool registration, sync wrappers, CallbackBridge
+        hermes_agent.py             # HermesAgent wrapper — background thread, NDJSON drain
+        system_prompt.py            # Dynamic system prompt — persona + state directives
+        router.py                   # FastAPI router: /ai/sessions, /ai/sessions/{id}/chat
+      app.py                        # ← one line added: app.include_router(ai_router.router)
+  vendor/
+    hermes-agent/                   # Vendored from Neurareport V2 (direct copy)
+```
+
 **Components to vendor/fork from Neurareport V2:**
 
-| Component | Neurareport Source | LoggerFast Adaptation |
-|-----------|-------------------|----------------------|
-| Agent wrapper | `hermes_agent.py` (982 lines) — wraps `AIAgent`, background thread, NDJSON drain | Fork, replace tool surface |
-| Tool adapter | `hermes_adapter.py` (496 lines) — tool registration, sync wrappers, callback bridge | Fork, rewire to LoggerFast tools |
-| Session state machine | `session.py` (327 lines) — state transitions, persistence | Rewrite states for LoggerFast |
-| LLM config | `llm.py` — OpenAI-compatible provider, Qwen config, thinking mode | Reuse as-is |
-| System prompt builder | `hermes_system_prompt.py` (550 lines) — dynamic context injection per state | Rewrite for LoggerFast domain |
-| Hermes framework | `vendor/hermes-agent/` — `AIAgent`, tool registry, skills, memory, session search | Direct reuse (vendored) |
+| Component | Neurareport Source | LoggerFast File |
+|-----------|-------------------|-----------------|
+| Agent wrapper | `hermes_agent.py` (982 lines) — wraps `AIAgent`, background thread, NDJSON drain | `ai/hermes_agent.py` |
+| Tool adapter | `hermes_adapter.py` (496 lines) — tool registration, sync wrappers, callback bridge | `ai/hermes_adapter.py` |
+| Session state machine | `session.py` (327 lines) — state transitions, persistence | `ai/session.py` |
+| LLM config | `llm.py` — OpenAI-compatible provider, Qwen config, thinking mode | `ai/llm.py` |
+| System prompt builder | `hermes_system_prompt.py` (550 lines) — dynamic context injection per state | `ai/system_prompt.py` |
+| Hermes framework | `vendor/hermes-agent/` — `AIAgent`, tool registry, skills, memory, session search | `agent/vendor/hermes-agent/` (direct reuse) |
 
 **What must be written fresh for LoggerFast:**
-- `tools.py` — all LoggerFast domain tools (read/write/diagnostic)
-- `hermes_system_prompt.py` — LoggerFast-specific persona, domain knowledge, state directives
+- `ai/tools.py` — all LoggerFast domain tools (read/write/diagnostic)
+- `ai/system_prompt.py` — LoggerFast-specific persona, domain knowledge, state directives
+- `ai/router.py` — FastAPI router for AI endpoints
 - MFM KB retrieval tool
 - Session DB schema (LoggerFast-specific tables)
 
-### Threading Model
-
+### Threading Model — ✅ DONE
 Follows the Neurareport pattern:
 1. Hermes `AIAgent` runs in a **background thread** via `asyncio.to_thread()`
 2. The main async loop **drains NDJSON events** in real-time via a sentinel queue pattern
 3. Async tool functions are wrapped for Hermes's sync registry via `asyncio.run_coroutine_threadsafe()`
 4. Callbacks (`on_tool_start`, `on_tool_complete`, `on_tool_progress`, `on_thinking`) are bridged to NDJSON events via `loop.call_soon_threadsafe()`
 
-### LLM Configuration
-
+### LLM Configuration — ✅ DONE
 Two model endpoints, same pattern as Neurareport V2's `llm.py`:
 
 **Primary (reasoning + tool calling):**
@@ -489,7 +488,7 @@ VISION_LLM_API_KEY=ollama
 
 GLM-OCR handles all PDF/image processing — register map table extraction, scanned page OCR, and structured data recognition. Hermes delegates to GLM-OCR via the `read_document` and `read_document_page_image` tools, then reasons over the extracted text with Qwen3.5.
 
-### Iteration & Timeout Limits
+### Iteration & Timeout Limits — ✅ DONE
 
 | Setting | Value | Rationale |
 |---------|-------|-----------|
@@ -497,7 +496,7 @@ GLM-OCR handles all PDF/image processing — register map table extraction, scan
 | Session timeout | 1800s (30 min) | End-to-end config of a large site |
 | Per-tool timeout | 30s (default), 120s (network scan) | Prevent hung tools from blocking the session |
 
-### System Access — Two Tiers
+### System Access — Two Tiers — ✅ DONE
 
 **Tier 1 — Internal function calls (preferred path):**
 Hermes calls the same validation and business logic the REST endpoints use, but directly in-process. Examples: `store.create_schema()`, `store.upsert_mapping()`, `appdb.ensure_data_table()`. This preserves validation and side effects.
@@ -517,9 +516,9 @@ The target user is a **customer's site engineer**, not the Neuact development te
 
 ---
 
-## Public APIs and Interfaces
+## Public APIs and Interfaces — ✅ DONE (49 endpoints verified)
 
-### Session API
+### Session API — ✅ DONE
 
 - `POST /ai/sessions` — create a session with scan scope, target DB, and optional user intent
 - `GET /ai/sessions/{id}` — fetch session state, staged plan, approvals, and summary
@@ -528,11 +527,11 @@ The target user is a **customer's site engineer**, not the Neuact development te
 - `POST /ai/sessions/{id}/approve` — record user approvals or rejections for staged items
 - `POST /ai/sessions/{id}/apply` — execute the approved plan into live LoggerFast config
 
-### New Utility Endpoints
+### New Utility Endpoints — ✅ DONE
 
 - `POST /devices/raw_read` — raw Modbus register read / OPC UA node browse without pre-existing device config. Parameters: `{ip, port, unit_id, start_address, count, protocol}`. Used by Hermes for discovery and verification.
 
-### MFM Knowledge Base API
+### MFM Knowledge Base API — ✅ DONE
 
 - `GET /ai/kb` — list all models in the KB (name, manufacturer, register count, verified status)
 - `GET /ai/kb/{model}` — get full KB entry for a model (register map, byte order, quirks)
@@ -542,7 +541,7 @@ The target user is a **customer's site engineer**, not the Neuact development te
 - `GET /ai/kb/{model}/document` — download the source PDF for a model
 - `GET /ai/kb/{model}/document/page/{page}` — render a specific page from the source PDF
 
-### NDJSON Event Contract
+### NDJSON Event Contract — ✅ DONE
 
 Streaming events from `POST /ai/sessions/{id}/chat`. Follows the same callback bridge pattern as Neurareport V2 (`hermes_adapter.py` lines 350-496) — Hermes callbacks are mapped to NDJSON events via `loop.call_soon_threadsafe()`.
 
@@ -576,9 +575,9 @@ Streaming events from `POST /ai/sessions/{id}/chat`. Follows the same callback b
 
 ---
 
-## Hermes Tool Surface
+## Hermes Tool Surface — ✅ DONE (70 tools registered)
 
-### Read Tools (auto-approved)
+### Read Tools (auto-approved) — ✅ DONE
 
 | Tool | Maps To | Purpose |
 |------|---------|---------|
@@ -597,7 +596,7 @@ Streaming events from `POST /ai/sessions/{id}/chat`. Follows the same callback b
 | `read_document` | GLM-OCR | Extract text + tables from a PDF via GLM-OCR (for KB ingestion) |
 | `read_document_page_image` | GLM-OCR | Render a PDF page as image → GLM-OCR for structured table recognition |
 
-### Write Tools (require approval)
+### Write Tools (require approval) — ✅ DONE
 
 | Tool | Maps To | Purpose |
 |------|---------|---------|
@@ -613,7 +612,7 @@ Streaming events from `POST /ai/sessions/{id}/chat`. Follows the same callback b
 | `propose_kb_entry` | MFM KB write | Propose a new KB entry extracted from a document |
 | `update_kb_entry` | MFM KB patch | Update an existing KB entry (e.g., firmware variant) |
 
-### Diagnostic Tools (auto-approved)
+### Diagnostic Tools (auto-approved) — ✅ DONE
 
 | Tool | Maps To | Purpose |
 |------|---------|---------|
@@ -625,7 +624,7 @@ Streaming events from `POST /ai/sessions/{id}/chat`. Follows the same callback b
 | `run_anomaly_check` | Layer 2 autoencoder | Run anomaly detection on a device's current readings, returns score + per-parameter contribution |
 | `read_prediction_status` | Layer 3 runtime | Get prediction state, trend alerts, and baseline status for a device |
 
-### State-Specific Toolsets
+### State-Specific Toolsets — ✅ DONE
 
 Not all tools are available in every state. Hermes only sees tools relevant to the current pipeline stage. This reduces context window pressure and prevents invalid operations.
 
@@ -640,7 +639,7 @@ Not all tools are available in every state. Hermes only sees tools relevant to t
 | `applied` | Read tools + `read_live_values` + `read_job_status` + `run_anomaly_check` + `read_prediction_status` (verification) |
 | `failed` | All read + diagnostic tools (investigation) + `read_source_file` |
 
-### Per-Tool Call Limits
+### Per-Tool Call Limits — ✅ DONE
 
 Prevents runaway tool calls. Enforced by the adapter, not the system prompt.
 
@@ -654,7 +653,7 @@ Prevents runaway tool calls. Enforced by the adapter, not the system prompt.
 | `migrate_table` | plan table count + 5 | One per table, with margin |
 | `read_source_file` | 20 | Enough for debugging, prevents context bloat |
 
-### Sanitization Gate
+### Sanitization Gate — ✅ DONE
 
 Before Hermes sees a tool result, `_sanitize_for_agent()` strips data that should not leak into skills or memory:
 
@@ -667,7 +666,7 @@ This follows the same pattern as Neurareport V2's sanitization gate (`hermes_ada
 
 ---
 
-## Skills System
+## Skills System — ✅ DONE
 
 Skills are a core feature of the Hermes agent framework (`vendor/hermes-agent/tools/skills_hub.py`). Unlike Neurareport V2 where skills are disabled in pipeline mode to save LLM calls, **LoggerFast keeps skills enabled** — site configuration is precisely where skills add the most value. Hermes gets measurably faster at configuring PM5110 sites after doing it 3 times.
 
@@ -754,7 +753,7 @@ Export/import API:
 
 ---
 
-## Session Model
+## Session Model — ✅ DONE
 
 ### Persistence Layers
 
@@ -828,7 +827,7 @@ State transitions are **hard-enforced via a transition table** (same as Neurarep
 
 ---
 
-## Approval Model
+## Approval Model — ✅ DONE
 
 **Plan-then-execute (default):** Hermes builds a complete plan, presents it as a summary ("I will create 10 devices, 1 schema, 10 tables, 390 mappings, 1 job"), engineer approves or edits, then Hermes executes everything.
 
@@ -841,7 +840,7 @@ The engineer is a customer's site engineer, not a developer. Hermes must explain
 
 ---
 
-## System Prompt Design
+## System Prompt Design — ✅ DONE
 
 The system prompt is **dynamic** — rebuilt on every turn based on current session state. Follows the Neurareport pattern of `build_system_prompt(session)` that injects live context.
 
@@ -888,7 +887,7 @@ limit:call_limit_reached
 
 ---
 
-## Learning Signal & Trajectory
+## Learning Signal & Trajectory — ✅ DONE
 
 ### Completion Signal
 
@@ -946,7 +945,7 @@ Injected into tool results (not as separate messages) when approaching limits:
 
 ---
 
-## Byte Order Propagation
+## Byte Order Propagation — ✅ DONE
 
 AI-derived byte order must flow through the entire backend:
 1. Identification result (Hermes determines byte order during discovery/verification)
@@ -1037,15 +1036,15 @@ This is required so Hermes's decisions affect actual polling behavior. The encod
 
 ## Deliverables
 
-1. **Hermes Agent Runtime** — NousResearch Hermes agent framework running in-process with Qwen3.5-27B via Ollama, tool registry, session manager, NDJSON streaming
-2. **MFM Knowledge Base + Document Pipeline** — PDF ingestion via GLM-OCR → structured KB entries with source document provenance. Hermes builds the KB from manufacturer communication guides, verified by engineer. KB stored as versioned JSON, loaded into SQLite at runtime.
-3. **Tool Surface** — read tools (config, devices, schemas, live values, KB lookup, document read, anomaly check, prediction status), write tools (create/map/migrate/job, KB propose/update), diagnostic tools (raw register read, port scan, code read)
-4. **Session API** — `/ai/sessions` endpoints with state machine, approval gates, trace persistence
-5. **KB API** — `/ai/kb` endpoints for upload, extraction, CRUD, and document retrieval
-6. **Validation Intelligence** — three-layer validation: Layer 1 (rule-based), Layer 2 (anomaly detection autoencoder per MFM model), Layer 3 (runtime predictive analysis via statistical methods / LSTM)
-7. **Skills System** — skill learning from sessions, structured storage, retrieval by relevance, portable export/import across deployments
-8. **Raw Register Endpoint** — one new endpoint for Modbus register read / OPC UA node browse without pre-existing device config
-9. **Frontend Integration** — chat UI in the React app (deferred — backend first)
+1. ✅ **Hermes Agent Runtime** — NousResearch Hermes agent framework running in-process with Qwen3.5-27B via Ollama, tool registry, session manager, NDJSON streaming
+2. ✅ **MFM Knowledge Base + Document Pipeline** — PDF ingestion via GLM-OCR → structured KB entries with source document provenance. Hermes builds the KB from manufacturer communication guides, verified by engineer. KB stored as versioned JSON, loaded into SQLite at runtime.
+3. ✅ **Tool Surface** — read tools (config, devices, schemas, live values, KB lookup, document read, anomaly check, prediction status), write tools (create/map/migrate/job, KB propose/update), diagnostic tools (raw register read, port scan, code read)
+4. ✅ **Session API** — `/ai/sessions` endpoints with state machine, approval gates, trace persistence
+5. ✅ **KB API** — `/ai/kb` endpoints for upload, extraction, CRUD, and document retrieval
+6. ✅ **Validation Intelligence** — Layer 1 (rule-based) DONE, Layer 2 (anomaly NN) DONE — param alias mapping fixed, Layer 3 (predictive runtime) DONE
+7. ✅ **Skills System** — skill learning from sessions, structured storage, retrieval by relevance, portable export/import across deployments
+8. ✅ **Raw Register Endpoint** — one new endpoint for Modbus register read / OPC UA node browse without pre-existing device config
+9. ❌ **Frontend Integration** — standalone HTML/JS chat UI at `/ai/ui/` works, but NOT integrated into React/Tauri desktop app as specified
 
 ---
 

@@ -1,0 +1,44 @@
+{
+  "models": {
+    "pm5110": {
+      "model": "PM5110",
+      "file": "pm5110.json",
+      "version": 2,
+      "source_doc": "schneider_pm5100_register_list.pdf",
+      "extraction_date": "2026-04-13",
+      "verified": true
+    },
+    "pm5300": {
+      "model": "PM5300",
+      "file": "pm5300.json",
+      "version": 2,
+      "source_doc": "schneider_pm5300_register_list.pdf",
+      "extraction_date": "2026-04-13",
+      "verified": true
+    },
+    "b23": {
+      "model": "B23",
+      "file": "b23.json",
+      "version": 2,
+      "source_doc": "abb_b23_b24_user_manual_2CMC485003M0201.pdf",
+      "extraction_date": "2026-04-13",
+      "verified": true
+    },
+    "vega": {
+      "model": "Vega",
+      "file": "vega.json",
+      "version": 2,
+      "source_doc": "lt_vega_manual_4D060193.pdf",
+      "extraction_date": "2026-04-13",
+      "verified": true
+    },
+    "mfm376": {
+      "model": "MFM376",
+      "file": "mfm376.json",
+      "version": 2,
+      "source_doc": "selec_mfm376_op506_v03.pdf",
+      "extraction_date": "2026-04-13",
+      "verified": true
+    }
+  }
+}

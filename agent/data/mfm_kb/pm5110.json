@@ -1,0 +1,449 @@
+{
+  "manufacturer": "Schneider Electric",
+  "model": "PM5110",
+  "protocol": "modbus_rtu",
+  "byte_order": "big_endian",
+  "identification": {
+    "register_address": 29,
+    "expected_value": "PM5110",
+    "description": "Meter model register (ASCII)"
+  },
+  "registers": [
+    {
+      "address": 3000,
+      "count": 2,
+      "parameter": "current_l1",
+      "data_type": "float32",
+      "unit": "A",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        0.0,
+        6000.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3002,
+      "count": 2,
+      "parameter": "current_l2",
+      "data_type": "float32",
+      "unit": "A",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        0.0,
+        6000.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3004,
+      "count": 2,
+      "parameter": "current_l3",
+      "data_type": "float32",
+      "unit": "A",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        0.0,
+        6000.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3006,
+      "count": 2,
+      "parameter": "current_neutral",
+      "data_type": "float32",
+      "unit": "A",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        0.0,
+        6000.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3010,
+      "count": 2,
+      "parameter": "current_avg",
+      "data_type": "float32",
+      "unit": "A",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3020,
+      "count": 2,
+      "parameter": "voltage_l12",
+      "data_type": "float32",
+      "unit": "V",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        0.0,
+        690.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3022,
+      "count": 2,
+      "parameter": "voltage_l23",
+      "data_type": "float32",
+      "unit": "V",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        0.0,
+        690.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3024,
+      "count": 2,
+      "parameter": "voltage_l31",
+      "data_type": "float32",
+      "unit": "V",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        0.0,
+        690.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3026,
+      "count": 2,
+      "parameter": "voltage_ll_avg",
+      "data_type": "float32",
+      "unit": "V",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        380.0,
+        440.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3028,
+      "count": 2,
+      "parameter": "voltage_l1n",
+      "data_type": "float32",
+      "unit": "V",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        180.0,
+        280.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3030,
+      "count": 2,
+      "parameter": "voltage_l2n",
+      "data_type": "float32",
+      "unit": "V",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        180.0,
+        280.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3032,
+      "count": 2,
+      "parameter": "voltage_l3n",
+      "data_type": "float32",
+      "unit": "V",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        180.0,
+        280.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3036,
+      "count": 2,
+      "parameter": "voltage_ln_avg",
+      "data_type": "float32",
+      "unit": "V",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        220.0,
+        254.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3054,
+      "count": 2,
+      "parameter": "active_power_l1",
+      "data_type": "float32",
+      "unit": "kW",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3056,
+      "count": 2,
+      "parameter": "active_power_l2",
+      "data_type": "float32",
+      "unit": "kW",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3058,
+      "count": 2,
+      "parameter": "active_power_l3",
+      "data_type": "float32",
+      "unit": "kW",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3060,
+      "count": 2,
+      "parameter": "active_power_total",
+      "data_type": "float32",
+      "unit": "kW",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3062,
+      "count": 2,
+      "parameter": "reactive_power_l1",
+      "data_type": "float32",
+      "unit": "kVAR",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3064,
+      "count": 2,
+      "parameter": "reactive_power_l2",
+      "data_type": "float32",
+      "unit": "kVAR",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3066,
+      "count": 2,
+      "parameter": "reactive_power_l3",
+      "data_type": "float32",
+      "unit": "kVAR",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3068,
+      "count": 2,
+      "parameter": "reactive_power_total",
+      "data_type": "float32",
+      "unit": "kVAR",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3070,
+      "count": 2,
+      "parameter": "apparent_power_l1",
+      "data_type": "float32",
+      "unit": "kVA",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3072,
+      "count": 2,
+      "parameter": "apparent_power_l2",
+      "data_type": "float32",
+      "unit": "kVA",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3074,
+      "count": 2,
+      "parameter": "apparent_power_l3",
+      "data_type": "float32",
+      "unit": "kVA",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3076,
+      "count": 2,
+      "parameter": "apparent_power_total",
+      "data_type": "float32",
+      "unit": "kVA",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3078,
+      "count": 2,
+      "parameter": "power_factor_l1",
+      "data_type": "float32",
+      "unit": "",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        -1.0,
+        1.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3080,
+      "count": 2,
+      "parameter": "power_factor_l2",
+      "data_type": "float32",
+      "unit": "",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        -1.0,
+        1.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3082,
+      "count": 2,
+      "parameter": "power_factor_l3",
+      "data_type": "float32",
+      "unit": "",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        -1.0,
+        1.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3084,
+      "count": 2,
+      "parameter": "power_factor_total",
+      "data_type": "float32",
+      "unit": "",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        -1.0,
+        1.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3110,
+      "count": 2,
+      "parameter": "frequency",
+      "data_type": "float32",
+      "unit": "Hz",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [
+        49.0,
+        51.0
+      ],
+      "source_page": null
+    },
+    {
+      "address": 3204,
+      "count": 2,
+      "parameter": "energy_active_import",
+      "data_type": "float32",
+      "unit": "kWh",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3206,
+      "count": 2,
+      "parameter": "energy_active_export",
+      "data_type": "float32",
+      "unit": "kWh",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3220,
+      "count": 2,
+      "parameter": "energy_reactive_import",
+      "data_type": "float32",
+      "unit": "kVARh",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    },
+    {
+      "address": 3236,
+      "count": 2,
+      "parameter": "energy_apparent_import",
+      "data_type": "float32",
+      "unit": "kVAh",
+      "scale": 1.0,
+      "access": "read",
+      "typical_range": [],
+      "source_page": null
+    }
+  ],
+  "quirks": [
+    "PF sign indicates leading/lagging (positive=lagging/inductive), NOT import/export.",
+    "Energy registers roll over. Int64 energy counters available at different addresses for higher precision.",
+    "Addresses are 0-based. Do NOT add 40001 offset — use raw address with FC 0x03.",
+    "PM5100/PM5110/PM5111 share the same register map.",
+    "Default: 9600 baud, 8N1, slave address 1."
+  ],
+  "source_document": "schneider_pm5100_register_list.pdf",
+  "extraction_date": "2026-04-13",
+  "verified_by_engineer": true,
+  "version": 2
+}

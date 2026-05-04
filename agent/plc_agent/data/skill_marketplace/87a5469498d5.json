@@ -1,0 +1,23 @@
+{
+  "skill_id": "87a5469498d5",
+  "skill_name": "test_skill_3d",
+  "description": "Test",
+  "version": 1,
+  "tags": [
+    "test"
+  ],
+  "success_count": 0,
+  "failure_count": 0,
+  "success_rate": 0.0,
+  "author_deployment": "37cc9684",
+  "content_hash": "2f176eec90c0a9d3",
+  "deprecated": false,
+  "created_at": "2026-04-15T07:51:49.904925+00:00",
+  "updated_at": "2026-04-15T07:51:49.904925+00:00",
+  "content": {
+    "description": "Test",
+    "tags": [
+      "test"
+    ]
+  }
+}

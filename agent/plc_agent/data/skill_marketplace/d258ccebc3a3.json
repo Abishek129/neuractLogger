@@ -1,0 +1,20 @@
+{
+  "skill_id": "d258ccebc3a3",
+  "skill_name": "t",
+  "description": "",
+  "version": 1,
+  "tags": [],
+  "success_count": 0,
+  "failure_count": 0,
+  "success_rate": 0.0,
+  "author_deployment": "37cc9684",
+  "content_hash": "166973b7c97d7dc3",
+  "deprecated": false,
+  "created_at": "2026-04-17T19:22:01.668763+00:00",
+  "updated_at": "2026-04-17T19:22:01.668763+00:00",
+  "content": {
+    "description": "",
+    "tags": [],
+    "source_session": "62844b0eee6f"
+  }
+}

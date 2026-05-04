@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import os
+from dotenv import load_dotenv
+# Load .env from agent/ directory (contains APP_DB_URL, REDIS_URL, etc.)
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+
 from fastapi import FastAPI
 import logging
 from logging.handlers import RotatingFileHandler
@@ -22,7 +26,7 @@ from .routers import ws_notifications as ws_notifications_router
 from .routers import protocol_types as protocol_types_router
 from .routers import bulk_import as bulk_import_router
 from fastapi import Depends
-from .permissions import require_logger_write
+from .permissions import require_logger_write, require_safe_or_write
 from .store import Store
 from ..metrics import metrics as METRICS
 
@@ -96,6 +100,7 @@ def create_app() -> FastAPI:
         "http://100.90.185.31:5173",
         "http://100.90.185.31:5175",
         "http://100.90.185.31:5180",
+        "http://100.90.185.31:8081",
         "http://100.90.185.31:9847",
     ]
     app.add_middleware(
@@ -117,30 +122,31 @@ def create_app() -> FastAPI:
     app.include_router(bulk_import_router.router)
     # Unprotected legacy router
     app.include_router(jobs2.router)
-    # Protected routers (Keycloak JWT + role-based — permissions temporarily disabled)
-    # _protected = [
-    #     jobs.router,
-    #     networking.router,
-    #     storage.router,
-    #     mappings_router.router,
-    #     system_router.router,
-    #     db_metrics_router.router,
-    #     reports_router.router,
-    #     debug_router.router,
-    # ]
-    # for r in _protected:
-    #     app.include_router(r, dependencies=[Depends(require_safe_or_write)])
-    app.include_router(jobs.router)
-    app.include_router(networking.router)
-    app.include_router(storage.router)
-    app.include_router(mappings_router.router)
-    app.include_router(system_router.router)
-    app.include_router(db_metrics_router.router)
-    app.include_router(reports_router.router)
-    app.include_router(debug_router.router)
+    # Protected routers (Keycloak JWT + role-based)
+    _protected = [
+        jobs.router,
+        networking.router,
+        storage.router,
+        mappings_router.router,
+        system_router.router,
+        db_metrics_router.router,
+        reports_router.router,
+        debug_router.router,
+    ]
+    for r in _protected:
+        app.include_router(r, dependencies=[Depends(require_safe_or_write)])
     # Notification routers (auth handled inside each endpoint/websocket)
     app.include_router(notifications_router.router)
     app.include_router(ws_notifications_router.router)
+    # AI Agent (Hermes + Qwen) — per-endpoint Keycloak auth in ai/router.py
+    from .ai.router import router as ai_router
+    app.include_router(ai_router)
+    # AI Chat UI — served as static files
+    from pathlib import Path as _Path
+    _ui_dir = _Path(__file__).resolve().parent / "ai" / "ui"
+    if _ui_dir.exists():
+        from fastapi.staticfiles import StaticFiles
+        app.mount("/ai/ui", StaticFiles(directory=str(_ui_dir), html=True), name="ai-ui")
     # Align DPAPI scope: rekey secrets under current context (machine scope for service)
     try:
         from .appdb import rekey_all_device_params as _rekey
@@ -177,6 +183,12 @@ def create_app() -> FastAPI:
         _jobs.start_enabled_jobs_on_boot()
     except Exception as _e:
         print("Start enabled jobs warning:", _e)
+    # Start prediction monitor (Layer 3)
+    try:
+        from .ai.prediction.background import start_prediction_monitor
+        start_prediction_monitor()
+    except Exception as _e:
+        print("Prediction monitor warning:", _e)
     return app
 
 

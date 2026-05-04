@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "additionalDirectories": [
+      "/home/rohith/desktop/LoggerFast/agent/plc_agent/api/ai/ui"
+    ]
+  }
+}

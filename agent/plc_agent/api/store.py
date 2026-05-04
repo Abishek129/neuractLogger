@@ -432,6 +432,22 @@ class Store:
                 rows.pop(field_key, None)
             cur["rows"] = rows
             self._mappings[table_id] = cur
+            # Persist: recompute mapping health and save to DB
+            try:
+                schema_id = None
+                for t in self._tables:
+                    if t.get("id") == table_id:
+                        schema_id = t.get("schemaId")
+                        break
+                req_fields = []
+                if schema_id:
+                    schema = self.get_schema(schema_id)
+                    if schema:
+                        req_fields = [f["key"] for f in schema.get("fields", []) if "key" in f]
+                health = self.mapping_health(table_id, required_fields=req_fields)
+                appdb.update_mapping_health(table_id, health)
+            except Exception:
+                pass
             return self.get_mapping(table_id)
 
     def set_table_device_binding(self, table_id: str, device_id: Optional[str]) -> None:
@@ -480,6 +496,22 @@ class Store:
             dst_rows = dict(src.get("rows") or {})
             dst["rows"] = dst_rows
             self._mappings[dst_table_id] = dst
+            # Persist: update mapping health for destination
+            try:
+                schema_id = None
+                for t in self._tables:
+                    if t.get("id") == dst_table_id:
+                        schema_id = t.get("schemaId")
+                        break
+                req_fields = []
+                if schema_id:
+                    schema = self.get_schema(schema_id)
+                    if schema:
+                        req_fields = [f["key"] for f in schema.get("fields", []) if "key" in f]
+                health = self.mapping_health(dst_table_id, required_fields=req_fields)
+                appdb.update_mapping_health(dst_table_id, health)
+            except Exception:
+                pass
             return self.get_mapping(dst_table_id)
 
     # -------------- Devices --------------
@@ -693,8 +725,11 @@ class Store:
 
     def delete_gateway(self, gid: str) -> bool:
         with self._mtx:
-            # Block deletion if referenced by any saved device (Option A)
+            # Block deletion if referenced by any saved device
             for d in self._devices.values():
+                # Check top-level gatewayId (primary) and params.gatewayId (legacy)
+                if d.get("gatewayId") == gid:
+                    return False
                 params = d.get("params") or {}
                 if params.get("gatewayId") == gid:
                     return False

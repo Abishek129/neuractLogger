@@ -1,0 +1,81 @@
+{
+  "3157a15c6526": {
+    "skill_id": "3157a15c6526",
+    "skill_name": "test_skill_3d",
+    "description": "Test",
+    "version": 1,
+    "tags": [
+      "test"
+    ],
+    "success_count": 0,
+    "failure_count": 0,
+    "success_rate": 0.0,
+    "author_deployment": "37cc9684",
+    "content_hash": "9538e5ce94d6d605",
+    "deprecated": false,
+    "created_at": "2026-04-15T07:52:26.325385+00:00",
+    "updated_at": "2026-04-15T07:52:26.325385+00:00"
+  },
+  "4bad9c2cf801": {
+    "skill_id": "4bad9c2cf801",
+    "skill_name": "roundtrip_test",
+    "description": "RT",
+    "version": 1,
+    "tags": [
+      "rt"
+    ],
+    "success_count": 0,
+    "failure_count": 0,
+    "success_rate": 0.0,
+    "author_deployment": "37cc9684",
+    "content_hash": "b971686dec7b41ef",
+    "deprecated": false,
+    "created_at": "2026-04-15T07:52:26.325497+00:00",
+    "updated_at": "2026-04-15T07:52:26.325497+00:00"
+  },
+  "473ff883ac75": {
+    "skill_id": "473ff883ac75",
+    "skill_name": "test_skill",
+    "description": "",
+    "version": 1,
+    "tags": [],
+    "success_count": 0,
+    "failure_count": 0,
+    "success_rate": 0.0,
+    "author_deployment": "37cc9684",
+    "content_hash": "62563c28d0c41bfc",
+    "deprecated": false,
+    "created_at": "2026-04-17T18:51:40.826773+00:00",
+    "updated_at": "2026-04-17T18:51:40.826773+00:00"
+  },
+  "2caf2b6799e4": {
+    "skill_id": "2caf2b6799e4",
+    "skill_name": "test",
+    "description": "",
+    "version": 1,
+    "tags": [],
+    "success_count": 0,
+    "failure_count": 0,
+    "success_rate": 0.0,
+    "author_deployment": "37cc9684",
+    "content_hash": "3e0cfc57a8ad11cb",
+    "deprecated": false,
+    "created_at": "2026-04-17T18:53:30.551368+00:00",
+    "updated_at": "2026-04-17T18:53:30.551368+00:00"
+  },
+  "d258ccebc3a3": {
+    "skill_id": "d258ccebc3a3",
+    "skill_name": "t",
+    "description": "",
+    "version": 1,
+    "tags": [],
+    "success_count": 0,
+    "failure_count": 0,
+    "success_rate": 0.0,
+    "author_deployment": "37cc9684",
+    "content_hash": "166973b7c97d7dc3",
+    "deprecated": false,
+    "created_at": "2026-04-17T19:22:01.668763+00:00",
+    "updated_at": "2026-04-17T19:22:01.668763+00:00"
+  }
+}
