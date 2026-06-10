@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -9,6 +10,21 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 _ENGINE: Optional[Engine] = None
+
+# SEC-2: schema field keys become SQL column identifiers in target-DB DDL
+# (tables.py migrate) and in the Rust engine's INSERT column lists. This is
+# the persistence chokepoint — every write path (create, add/patch field,
+# import, AI tools) funnels through save_schema/add_schema_field, so bad keys
+# can never reach the catalog regardless of route-level validation.
+_FIELD_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_MAX_IDENT_LEN = 63  # PostgreSQL identifier limit
+
+
+def _check_field_key(key: Any) -> str:
+    k = key or ""
+    if not isinstance(k, str) or not _FIELD_KEY_RE.match(k) or len(k) > _MAX_IDENT_LEN:
+        raise ValueError(f"FIELD_KEY_INVALID:{k}")
+    return k
 
 
 def _app_folder() -> Path:
@@ -170,6 +186,8 @@ def init() -> None:
             )
         )
         _ensure_column(c, "app_schema_fields", "desc_text", "TEXT")
+        _ensure_column(c, "app_schema_fields", "formula", "TEXT")
+        _ensure_column(c, "app_schema_fields", "eval_order", "INTEGER")
         try:
             c.execute(
                 text("UPDATE app_schema_fields SET desc_text = 'desc' WHERE desc_text IS NULL")
@@ -367,7 +385,7 @@ def init() -> None:
             )
         )
         # Pre-populate with existing protocols
-        for proto in ["modbus", "opcua", "mqtt"]:
+        for proto in ["modbus", "opcua", "mqtt", "derived"]:
             try:
                 c.execute(
                     text(_upsert_sql("app_protocol_types", ["type"], ["type"])),
@@ -421,7 +439,7 @@ def load_schemas() -> List[Dict[str, Any]]:
         for r in rows:
             f = _fetchall(
                 c,
-                "SELECT key, type, unit, scale, desc_text AS \"desc\" "
+                "SELECT key, type, unit, scale, desc_text AS \"desc\", formula, eval_order "
                 "FROM app_schema_fields WHERE schema_id=:schema_id ORDER BY key",
                 {"schema_id": r["id"]},
             )
@@ -441,17 +459,19 @@ def save_schema(schema: Dict[str, Any]) -> None:
                 text(
                     _upsert_sql(
                         "app_schema_fields",
-                        ["schema_id", "key", "type", "unit", "scale", "desc_text"],
+                        ["schema_id", "key", "type", "unit", "scale", "desc_text", "formula", "eval_order"],
                         ["schema_id", "key"],
                     )
                 ),
                 {
                     "schema_id": schema["id"],
-                    "key": fld.get("key"),
+                    "key": _check_field_key(fld.get("key")),  # SEC-2 chokepoint
                     "type": fld.get("type"),
                     "unit": fld.get("unit"),
                     "scale": fld.get("scale"),
                     "desc_text": fld.get("desc"),
+                    "formula": fld.get("formula"),
+                    "eval_order": fld.get("eval_order"),
                 },
             )
 
@@ -463,17 +483,19 @@ def add_schema_field(schema_id: str, field: Dict[str, Any]) -> None:
             text(
                 _upsert_sql(
                     "app_schema_fields",
-                    ["schema_id", "key", "type", "unit", "scale", "desc_text"],
+                    ["schema_id", "key", "type", "unit", "scale", "desc_text", "formula", "eval_order"],
                     ["schema_id", "key"],
                 )
             ),
             {
                 "schema_id": schema_id,
-                "key": field.get("key"),
+                "key": _check_field_key(field.get("key")),  # SEC-2 chokepoint
                 "type": field.get("type"),
                 "unit": field.get("unit"),
                 "scale": field.get("scale"),
                 "desc_text": field.get("desc"),
+                "formula": field.get("formula"),
+                "eval_order": field.get("eval_order"),
             },
         )
 

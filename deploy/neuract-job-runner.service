@@ -1,0 +1,41 @@
+# LoggerFast Rust data engine (job runner) — production unit.
+#
+# Defense-in-depth for findings C1 / H-ERR-4: the engine now survives
+# meta-DB outages internally (capped-backoff reconnect), and this unit
+# guarantees that even an unexpected crash (panic, OOM-kill, bad deploy)
+# self-heals via Restart=always instead of silently stopping data logging.
+#
+# Install: see deploy/README.md
+
+[Unit]
+Description=Neuract LoggerFast data engine (Rust job runner)
+Documentation=file:///opt/neuract/deploy/README.md
+# Start after the local PostgreSQL if it lives on this box. The engine also
+# retries on its own, so a remote/slow DB does not prevent startup.
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=neuract
+Group=neuract
+# All configuration comes from the environment file (APP_DB_URL is required).
+EnvironmentFile=/etc/neuract/logger.env
+ExecStart=/opt/neuract/bin/neuract-job-runner
+WorkingDirectory=/var/lib/neuract
+# Crash resilience (H-ERR-4): always respawn, 5s pause between attempts.
+Restart=always
+RestartSec=5
+# Graceful shutdown (H-ERR-2): SIGTERM triggers the engine's drain path
+# (pending background write + final batch-buffer flush, exit 0). Give it
+# time before systemd escalates to SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# Hardening (optional but recommended)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

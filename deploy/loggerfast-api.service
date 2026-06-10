@@ -1,0 +1,36 @@
+# LoggerFast FastAPI control plane (metadata/config API) — production unit.
+#
+# Notes:
+#   * LOGGER_ENABLE_AI is intentionally NOT set in /etc/neuract/logger.env:
+#     unset (or "0") means the AI pipeline is OFF — the production default.
+#   * LOGGER_CORS_ORIGINS and KC_REQUIRED_AZP have placeholders in
+#     /etc/neuract/logger.env and MUST be set for production (M13/M14).
+#
+# Install: see deploy/README.md
+
+[Unit]
+Description=Neuract LoggerFast API (FastAPI / uvicorn)
+Documentation=file:///opt/neuract/deploy/README.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=neuract
+Group=neuract
+EnvironmentFile=/etc/neuract/logger.env
+# The app package lives at /opt/neuract/agent (contains plc_agent/).
+WorkingDirectory=/opt/neuract/agent
+ExecStart=/opt/neuract/venv/bin/uvicorn plc_agent.api.app:app --host 127.0.0.1 --port 5175
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=20
+# Hardening (optional but recommended)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

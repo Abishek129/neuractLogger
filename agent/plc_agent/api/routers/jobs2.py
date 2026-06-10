@@ -126,6 +126,7 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
             endpoint = safe_ep
         try:
             client = _get_opcua_client(endpoint)
+            read_failed = False
             for field, spec in rows.items():
                 if (spec.get("protocol") or "").lower() != "opcua":
                     continue
@@ -152,6 +153,12 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
                 except Exception as e:
                     log.warning("OPC UA read failed field=%s node=%s err=%s", field, nid, e)
                     values[field] = None
+                    read_failed = True
+            # H-ERR-1: a per-field read failure usually means the cached
+            # session is dead (server restarted). Drop the cached client so
+            # the next call reconnects instead of failing forever.
+            if read_failed:
+                _drop_opcua_client(endpoint)
         except Exception as e:
             log.error("OPC UA connect/read failed endpoint=%s err=%s", endpoint, e)
             _drop_opcua_client(endpoint)
@@ -294,7 +301,7 @@ def dry_run(job_id: str) -> Dict[str, Any]:
     return {"success": True, "items": samples}
 
 
-@router.delete("/{job_id}")
+@router.delete("/{job_id}", dependencies=[Depends(require_logger_write)])
 def delete_job(job_id: str) -> Dict[str, Any]:
     """Delete from App DB + memory, and clear metrics/history."""
     job = Store.instance().get_job(job_id)
@@ -309,7 +316,7 @@ def delete_job(job_id: str) -> Dict[str, Any]:
     return {"success": True}
 
 
-@router.delete("")
+@router.delete("", dependencies=[Depends(require_logger_write)])
 def delete_jobs_bulk(payload: Dict[str, Any]) -> Dict[str, Any]:
     ids = payload.get("ids") or []
     if not isinstance(ids, list) or not ids:
@@ -361,8 +368,20 @@ def backfill(job_id: str) -> Dict[str, Any]:
             with engine.begin() as conn:
                 conn.execute(text(sql), params)
             wrote += 1
-        except Exception as e:
-            return {"success": False, "message": str(e), "wrote": wrote}
+        except Exception:
+            # H-API-3: a server-side read/write failure must not masquerade as
+            # HTTP 200 + success:false, and the raw exception text (SQL/table
+            # internals) must not leak to the client. Details go to the log.
+            log.exception("backfill failed job=%s table=%s after %d write(s)", job_id, tbl_id, wrote)
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "success": False,
+                    "error": "BACKFILL_WRITE_FAILED",
+                    "message": f"backfill failed on table {tbl_id} after {wrote} successful write(s); see server log",
+                    "wrote": wrote,
+                },
+            )
     return {"success": True, "wrote": wrote}
 
 

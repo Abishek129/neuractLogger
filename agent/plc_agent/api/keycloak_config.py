@@ -28,7 +28,9 @@ KEYCLOAK_ALLOWED_ISSUERS: List[str] = list(dict.fromkeys([_default_issuer, *_loc
 
 # Admin client credentials (service account for user management)
 KEYCLOAK_ADMIN_CLIENT_ID: str = os.environ.get("KC_ADMIN_CLIENT_ID", "neuract_owner")
-KEYCLOAK_ADMIN_CLIENT_SECRET: str = os.environ.get("KC_ADMIN_CLIENT_SECRET", "SwNbUunGlyDZaxWJoxpTUAwDYuuJqxB5")
+# Secret MUST come from the environment — never hardcode it in source.
+# NOTE: the previously committed value is compromised and must be rotated in Keycloak.
+KEYCLOAK_ADMIN_CLIENT_SECRET: str = os.environ.get("KC_ADMIN_CLIENT_SECRET", "")
 
 # Derived URLs
 KEYCLOAK_JWKS_URL: str = f"{KEYCLOAK_BASE_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/certs"

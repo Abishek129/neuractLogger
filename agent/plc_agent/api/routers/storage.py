@@ -59,6 +59,9 @@ def update_target(tid: str, patch: Dict[str, Any]) -> Dict[str, Any]:
     if not cur:
         raise HTTPException(status_code=404, detail="not_found")
     cur.update({k: v for k, v in patch.items() if k in ("provider", "conn", "status", "lastMsg")})
+    # Persist to the App DB (same path as create) — previously the update was
+    # in-memory only and silently lost on restart (E2E extra observation).
+    appdb.save_target(cur)
     return {"success": True, "item": cur}
 
 

@@ -19,7 +19,6 @@ use opcua::sync::RwLock;
 use opcua::types::Variant;
 use tokio_modbus::prelude::{Reader, Slave, SlaveContext};
 use tokio_postgres::{Client as PgClient, NoTls};
-use tokio_postgres::types::{ToSql, Type};
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::{HLOCAL, LocalFree};
 #[cfg(target_os = "windows")]
@@ -34,7 +33,23 @@ const DEFAULT_OPCUA_ENDPOINT: &str = "opc.tcp://127.0.0.1:4840/freeopcua/server/
 const ERROR_LOG_FILENAME: &str = "error_log_rust.csv";
 const LOG_FILENAME: &str = "agent_rust.log";
 const MQTT_LOG_FILENAME: &str = "mqtt_jobs.log";
-const LOG_MAX_BYTES: u64 = 500 * 1024 * 1024; // 500 MB, matches Python
+/// Per-file size cap. Override with LOGGER_LOG_MAX_MB (megabytes).
+fn log_max_bytes() -> u64 {
+    env::var("LOGGER_LOG_MAX_MB")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(|mb| mb.max(1) * 1024 * 1024)
+        .unwrap_or(100 * 1024 * 1024)
+}
+
+/// Rotated backups kept per log file. Override with LOGGER_LOG_BACKUPS.
+fn log_max_backups() -> u32 {
+    env::var("LOGGER_LOG_BACKUPS")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(|n| n.max(1))
+        .unwrap_or(5)
+}
 
 // --- Rotating file writer (mirrors Python RotatingFileHandler) ---
 
@@ -43,10 +58,11 @@ struct RotatingFileWriter {
     file: std::fs::File,
     written: u64,
     max_bytes: u64,
+    max_backups: u32,
 }
 
 impl RotatingFileWriter {
-    fn new(path: PathBuf, max_bytes: u64) -> std::io::Result<Self> {
+    fn new(path: PathBuf, max_bytes: u64, max_backups: u32) -> std::io::Result<Self> {
         let existing_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
         Ok(Self {
@@ -54,26 +70,25 @@ impl RotatingFileWriter {
             file,
             written: existing_size,
             max_bytes,
+            max_backups: max_backups.max(1),
         })
     }
 
     fn rotate(&mut self) -> std::io::Result<()> {
-        // Shift existing rotated files: .999 <- .998 <- ... <- .2 <- .1 <- current
-        // Find the highest existing backup number
-        let mut max_n = 0u32;
-        for n in 1..=9999 {
-            let backup = format!("{}.{}", self.path.display(), n);
-            if fs::metadata(&backup).is_ok() {
-                max_n = n;
-            } else {
-                break;
-            }
-        }
-        // Shift files up: .N -> .N+1
-        for n in (1..=max_n).rev() {
+        // Drop the oldest backup, shift the rest up: .N -> .N+1, current -> .1
+        let oldest = format!("{}.{}", self.path.display(), self.max_backups);
+        let _ = fs::remove_file(&oldest);
+        for n in (1..self.max_backups).rev() {
             let from = format!("{}.{}", self.path.display(), n);
             let to = format!("{}.{}", self.path.display(), n + 1);
             let _ = fs::rename(&from, &to);
+        }
+        // Clean up any backups beyond the cap left over from older builds
+        for n in (self.max_backups + 1)..=9999 {
+            let stale = format!("{}.{}", self.path.display(), n);
+            if fs::remove_file(&stale).is_err() {
+                break;
+            }
         }
         // Rename current -> .1
         let backup1 = format!("{}.1", self.path.display());
@@ -115,7 +130,7 @@ fn setup_logging() {
     let log_path = dir.join(LOG_FILENAME);
 
     // File writer (rotating)
-    let file_writer = match RotatingFileWriter::new(log_path.clone(), LOG_MAX_BYTES) {
+    let file_writer = match RotatingFileWriter::new(log_path.clone(), log_max_bytes(), log_max_backups()) {
         Ok(w) => w,
         Err(e) => {
             eprintln!("File logging setup warning: {}", e);
@@ -179,7 +194,7 @@ fn setup_mqtt_logging() {
     let dir = log_dir();
     let _ = fs::create_dir_all(&dir);
     let path = dir.join(MQTT_LOG_FILENAME);
-    match RotatingFileWriter::new(path.clone(), LOG_MAX_BYTES) {
+    match RotatingFileWriter::new(path.clone(), log_max_bytes(), log_max_backups()) {
         Ok(w) => {
             MQTT_LOGGER.set(Mutex::new(w)).ok();
             info!("MQTT log file: {}", path.display());
@@ -239,7 +254,6 @@ struct TriggerFireInfo {
     op: String,
     current_value: Option<f64>,
     previous_value: Option<f64>,
-    threshold: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -252,7 +266,6 @@ struct TableDef {
 
 #[derive(Clone, Debug)]
 struct DbTarget {
-    id: String,
     provider: String,
     conn: String,
 }
@@ -275,14 +288,11 @@ struct MappingRow {
     data_type: String,
     encoding: String,
     scale: Option<f64>,
-    deadband: Option<f64>,
     device_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
 struct Gateway {
-    id: String,
-    name: Option<String>,
     host: Option<String>,
 }
 
@@ -371,16 +381,27 @@ struct RegisterBucket {
     fields: Vec<BucketField>,
 }
 
+/// A derived (formula-based) field — evaluated at runtime from device-read values.
+#[derive(Clone, Debug)]
+struct DerivedField {
+    field_key: String,
+    formula_str: String,
+    eval_order: i32,
+}
+
 struct TableRuntime {
     table: TableDef,
     target_client: Arc<PgClient>,
+    /// Target-DB conn string — used to re-acquire a client when the cached
+    /// connection dies (target-DB restart) so buffered rows can be retried.
+    target_conn: String,
     mapping: Vec<MappingRow>,
     device: Device,
     gateway: Option<Gateway>,
     /// Precomputed register buckets for Modbus bulk reads (empty for non-Modbus devices)
     modbus_buckets: Vec<RegisterBucket>,
-    /// #6: Cached prepared statement for single-row inserts (trigger path)
-    cached_insert_sql: Option<String>,
+    /// Derived fields with formulas, sorted by eval_order for single-pass evaluation
+    derived_fields: Vec<DerivedField>,
 }
 
 struct ReadTimings {
@@ -396,6 +417,10 @@ struct WriteTimings {
 #[derive(Clone, Debug)]
 enum FieldValue {
     Float(f64),
+    /// f32-origin value (Modbus float32, OPC UA Float). Kept as f32 so SQL
+    /// serialization uses the f32 shortest-roundtrip representation
+    /// ("229.4", not "229.39999389648438").
+    Float32(f32),
     Int(i64),
     Bool(bool),
     Text(String),
@@ -407,6 +432,7 @@ impl FieldValue {
     fn as_f64(&self) -> Option<f64> {
         match self {
             FieldValue::Float(v) => Some(*v),
+            FieldValue::Float32(v) => Some(*v as f64),
             FieldValue::Int(v) => Some(*v as f64),
             FieldValue::Bool(v) => Some(if *v { 1.0 } else { 0.0 }),
             FieldValue::Text(_) => None,
@@ -415,13 +441,21 @@ impl FieldValue {
 
     fn to_sql_literal(&self) -> String {
         match self {
+            // Any non-finite numeric (NaN OR +/-Infinity) becomes SQL NULL —
+            // Infinity in the DB poisons downstream aggregates (avg/sum) and
+            // NaN-vs-Inf asymmetry made failures formula-dependent.
             FieldValue::Float(v) => {
-                if v.is_nan() {
-                    "NULL".to_string()
-                } else if v.is_infinite() {
-                    if *v > 0.0 { "'Infinity'".to_string() } else { "'-Infinity'".to_string() }
-                } else {
+                if v.is_finite() {
                     v.to_string()
+                } else {
+                    "NULL".to_string()
+                }
+            }
+            FieldValue::Float32(v) => {
+                if v.is_finite() {
+                    v.to_string()
+                } else {
+                    "NULL".to_string()
                 }
             }
             FieldValue::Int(v) => v.to_string(),
@@ -435,6 +469,7 @@ impl std::fmt::Display for FieldValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FieldValue::Float(v) => write!(f, "{}", v),
+            FieldValue::Float32(v) => write!(f, "{}", v),
             FieldValue::Int(v) => write!(f, "{}", v),
             FieldValue::Bool(v) => write!(f, "{}", v),
             FieldValue::Text(s) => write!(f, "{}", s),
@@ -451,7 +486,9 @@ static ERROR_CSV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 struct DeviceSession {
     endpoint: String,
-    client: Client,
+    /// Kept alive for the lifetime of the session — dropping the opcua Client
+    /// tears down the underlying connection (never read directly).
+    _client: Client,
     session: Arc<RwLock<Session>>,
     nodes: HashMap<String, NodeId>,
     last_used: Instant,
@@ -468,7 +505,7 @@ impl DeviceManager {
 
     fn get_session(&self, device: &Device) -> Result<Arc<Mutex<DeviceSession>>> {
         let dev_id = device.id.clone();
-        if let Some(sess) = self.sessions.lock().unwrap().get(&dev_id) {
+        if let Some(sess) = self.sessions.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&dev_id) {
             return Ok(sess.clone());
         }
         let endpoint = device
@@ -497,13 +534,13 @@ impl DeviceManager {
             .map_err(|e| anyhow!("opcua connect failed: {}", e))?;
         let sess = DeviceSession {
             endpoint,
-            client,
+            _client: client,
             session,
             nodes: HashMap::new(),
             last_used: Instant::now(),
         };
         let handle = Arc::new(Mutex::new(sess));
-        self.sessions.lock().unwrap().insert(dev_id, handle.clone());
+        self.sessions.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(dev_id, handle.clone());
         Ok(handle)
     }
 }
@@ -518,16 +555,22 @@ impl TargetManager {
     }
 
     async fn get_client(&self, conn: &str) -> Result<Arc<PgClient>> {
-        // #7: Check if cached client is still alive
-        if let Some(c) = self.clients.lock().unwrap().get(conn) {
+        // #7: Check if cached client is still alive.
+        // IMPORTANT: clone the Arc out and drop the mutex guard BEFORE any
+        // .await or re-lock — holding the guard across the health check
+        // self-deadlocked when the stale branch re-locked the same mutex.
+        let cached = self.clients
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(conn)
+            .cloned();
+        if let Some(c) = cached {
             // Quick health check — if this fails, drop and reconnect
-            match c.simple_query("").await {
-                Ok(_) => return Ok(c.clone()),
-                Err(_) => {
-                    warn!("target db connection stale, reconnecting: {}", conn);
-                    self.clients.lock().unwrap().remove(conn);
-                }
+            if !c.is_closed() && c.simple_query("").await.is_ok() {
+                return Ok(c);
             }
+            warn!("target db connection stale, reconnecting: {}", redact_dsn(conn));
+            self.clients.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(conn);
         }
         let (client, connection) = tokio_postgres::connect(conn, NoTls)
             .await
@@ -538,7 +581,7 @@ impl TargetManager {
             }
         });
         let client = Arc::new(client);
-        self.clients.lock().unwrap().insert(conn.to_string(), client.clone());
+        self.clients.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(conn.to_string(), client.clone());
         Ok(client)
     }
 }
@@ -591,37 +634,35 @@ struct JobHandle {
     join: std::thread::JoinHandle<()>,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    setup_logging();
-    setup_mqtt_logging();
-    let app_db_url = env::var("APP_DB_URL").context("APP_DB_URL is required")?;
-    let bench_db_url = env::var("BENCH_DB_URL")
-        .unwrap_or_else(|_| "postgresql://postgres@localhost/loggerfast_metrics".to_string());
-    let poll_ms: u64 = env::var("JOB_POLL_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(2000);
-
-    let (meta_client, meta_conn) = tokio_postgres::connect(&app_db_url, NoTls)
+/// Connect to the metadata DB and spawn its connection-driver task.
+/// The driver task only logs on error; liveness is detected via
+/// `client.is_closed()` in the supervisor loop, which reconnects.
+async fn connect_meta_db(app_db_url: &str) -> Result<Arc<PgClient>> {
+    let (client, conn) = tokio_postgres::connect(app_db_url, NoTls)
         .await
         .context("metadata db connect failed")?;
     tokio::spawn(async move {
-        if let Err(e) = meta_conn.await {
+        if let Err(e) = conn.await {
             error!("metadata db connection error: {}", e);
         }
     });
+    Ok(Arc::new(client))
+}
 
-    // Connect to bench metrics DB
-    let (bench_client, bench_conn) = tokio_postgres::connect(&bench_db_url, NoTls)
+/// Connect to the bench-metrics DB, spawn its connection-driver task and make
+/// sure the bench_metrics table exists. Mirrors connect_meta_db: the driver
+/// task only logs on error; a dead client is detected via `is_closed()` by
+/// each job's report loop, which reconnects with capped backoff (non-fatal).
+async fn connect_bench_db(bench_db_url: &str) -> Result<Arc<PgClient>> {
+    let (client, conn) = tokio_postgres::connect(bench_db_url, NoTls)
         .await
         .context("bench metrics db connect failed")?;
     tokio::spawn(async move {
-        if let Err(e) = bench_conn.await {
+        if let Err(e) = conn.await {
             error!("bench metrics db connection error: {}", e);
         }
     });
-    bench_client.execute(
+    client.execute(
         "CREATE TABLE IF NOT EXISTS bench_metrics (
             id              BIGSERIAL PRIMARY KEY,
             ts_utc          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -644,8 +685,75 @@ async fn main() -> Result<()> {
             write_err       BIGINT DEFAULT 0
         )", &[]
     ).await.context("create bench_metrics table failed")?;
-    info!("bench metrics DB connected: {}", bench_db_url);
-    let bench_client = Arc::new(bench_client);
+    Ok(Arc::new(client))
+}
+
+/// Resolves when SIGINT (ctrl-c) or, on unix, SIGTERM is received.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut term = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("failed to install SIGTERM handler: {}", e);
+                let _ = tokio::signal::ctrl_c().await;
+                return;
+            }
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = term.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+/// Sleep for `total`, waking early (within ~200ms) if `flag` becomes true.
+async fn sleep_unless(total: Duration, flag: &AtomicBool) {
+    let slice = Duration::from_millis(200);
+    let deadline = Instant::now() + total;
+    while Instant::now() < deadline {
+        if flag.load(Ordering::Relaxed) {
+            return;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        tokio::time::sleep(remaining.min(slice)).await;
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    setup_logging();
+    setup_mqtt_logging();
+    let app_db_url = env::var("APP_DB_URL").context("APP_DB_URL is required")?;
+    let bench_db_url = env::var("BENCH_DB_URL")
+        .unwrap_or_else(|_| "postgresql://postgres@localhost/loggerfast_metrics".to_string());
+    let poll_ms: u64 = env::var("JOB_POLL_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2000);
+
+    // Graceful shutdown: SIGTERM/SIGINT set this flag; the supervisor loop
+    // then stops all jobs (each drains pending writes + flushes its batch
+    // buffers) and exits 0.
+    let shutdown = Arc::new(AtomicBool::new(false));
+    {
+        let sd = shutdown.clone();
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            info!("shutdown signal received — stopping jobs and flushing buffers");
+            sd.store(true, Ordering::SeqCst);
+        });
+    }
+
+    let mut meta_client = connect_meta_db(&app_db_url).await?;
+
+    // Connect to bench metrics DB (jobs self-heal this connection later)
+    let bench_client = connect_bench_db(&bench_db_url).await?;
+    info!("bench metrics DB connected: {}", redact_dsn(&bench_db_url));
 
     let device_manager = Arc::new(DeviceManager::new());
 
@@ -660,11 +768,55 @@ async fn main() -> Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(10);
 
-    let meta_client = Arc::new(meta_client);
     let mut running: HashMap<String, JobHandle> = HashMap::new();
+    // Supervisor resilience: transient metadata-DB errors must never escape
+    // this loop — running jobs hold their own target-DB connections and keep
+    // acquiring through a meta-DB outage.
+    let mut meta_err_streak: u32 = 0;
 
     loop {
-        let jobs = load_running_jobs(meta_client.as_ref()).await?;
+        if shutdown.load(Ordering::SeqCst) {
+            break;
+        }
+
+        // Detect a dead metadata connection and reconnect (the connection
+        // driver task exits on error; it never reconnects by itself).
+        if meta_client.is_closed() {
+            match connect_meta_db(&app_db_url).await {
+                Ok(c) => {
+                    info!("metadata db reconnected");
+                    meta_client = c;
+                    meta_err_streak = 0;
+                }
+                Err(e) => {
+                    meta_err_streak = meta_err_streak.saturating_add(1);
+                    let backoff = meta_backoff(poll_ms, meta_err_streak);
+                    warn!(
+                        "metadata db reconnect failed (attempt {}): {} — retrying in {:.1}s; running jobs unaffected",
+                        meta_err_streak, e, backoff.as_secs_f64()
+                    );
+                    sleep_unless(backoff, &shutdown).await;
+                    continue;
+                }
+            }
+        }
+
+        let jobs = match load_running_jobs(meta_client.as_ref()).await {
+            Ok(jobs) => {
+                meta_err_streak = 0;
+                jobs
+            }
+            Err(e) => {
+                meta_err_streak = meta_err_streak.saturating_add(1);
+                let backoff = meta_backoff(poll_ms, meta_err_streak);
+                warn!(
+                    "supervisor poll failed (attempt {}): {} — retrying in {:.1}s; running jobs unaffected",
+                    meta_err_streak, e, backoff.as_secs_f64()
+                );
+                sleep_unless(backoff, &shutdown).await;
+                continue;
+            }
+        };
         let want: HashMap<String, JobDef> = jobs.into_iter().map(|j| (j.id.clone(), j)).collect();
 
         for job in want.values() {
@@ -675,6 +827,7 @@ async fn main() -> Result<()> {
             let meta = meta_client.clone();
             let dm = device_manager.clone();
             let bc = bench_client.clone();
+            let bdu = bench_db_url.clone();
             let job_clone = job.clone();
             let job_id = job.id.clone();
             let stop_thread = stop.clone();
@@ -689,7 +842,7 @@ async fn main() -> Result<()> {
                         return;
                     }
                 };
-                if let Err(e) = rt.block_on(run_job(job_clone, meta, dm, bc, stop_thread, hc, abu, ncs)) {
+                if let Err(e) = rt.block_on(run_job(job_clone, meta, dm, bc, bdu, stop_thread, hc, abu, ncs)) {
                     error!("job {} failed: {}", job_id, e);
                 }
             });
@@ -712,15 +865,43 @@ async fn main() -> Result<()> {
             }
         }
 
-        tokio::time::sleep(Duration::from_millis(poll_ms)).await;
+        sleep_unless(Duration::from_millis(poll_ms), &shutdown).await;
     }
+
+    // Graceful shutdown: signal every job to stop, then join each job thread.
+    // run_job's epilogue drains the pending background write and flushes all
+    // buffered batch rows before returning, so no in-flight data is lost.
+    let n = running.len();
+    info!("graceful shutdown: stopping {} running job(s)", n);
+    for handle in running.values() {
+        handle.stop.store(true, Ordering::SeqCst);
+    }
+    for (job_id, handle) in running.drain() {
+        let join = handle.join;
+        match tokio::task::spawn_blocking(move || join.join()).await {
+            Ok(Ok(())) => info!("job {} stopped cleanly", job_id),
+            Ok(Err(_)) => error!("job {} thread panicked during shutdown", job_id),
+            Err(e) => error!("job {} join task failed during shutdown: {}", job_id, e),
+        }
+    }
+    info!("graceful shutdown complete ({} job(s) stopped) — exiting 0", n);
+    Ok(())
+}
+
+/// Capped exponential backoff for metadata-DB failures: poll_ms * 2^(streak-1),
+/// capped at 30s, with a 250ms floor.
+fn meta_backoff(poll_ms: u64, streak: u32) -> Duration {
+    let base = poll_ms.max(250);
+    let factor = 1u64 << streak.saturating_sub(1).min(10);
+    Duration::from_millis(base.saturating_mul(factor).min(30_000))
 }
 
 async fn run_job(
     job: JobDef,
     meta_client: Arc<PgClient>,
     device_manager: Arc<DeviceManager>,
-    bench_client: Arc<PgClient>,
+    mut bench_client: Arc<PgClient>,
+    bench_db_url: String,
     stop: Arc<AtomicBool>,
     http_client: reqwest::Client,
     api_base_url: String,
@@ -780,6 +961,21 @@ async fn run_job(
         && (job.batch_count > 1 || job.batch_ms > 0.0);
     let mut batch_buffers: HashMap<String, Vec<BufferedRow>> = HashMap::new();
     let mut batch_flush_ts: HashMap<String, Instant> = HashMap::new();
+    // M11: hard cap on buffered rows per table while the target DB is down.
+    // When the cap forces dropping, the drop is loudly logged + error-CSV'd.
+    let buffer_cap_rows: usize = env::var("BATCH_BUFFER_CAP_ROWS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n: &usize| n > 0)
+        .unwrap_or(10_000);
+    let mut flush_fail_streak: u32 = 0;
+    let mut flush_backoff_until: Option<Instant> = None;
+    // Bench-metrics self-healing (mirrors the meta-DB reconnect pattern):
+    // the connection driver task never reconnects by itself, so without this
+    // every report window after an outage logged 'bench db write failed'
+    // forever. Non-fatal: data acquisition is unaffected either way.
+    let mut bench_err_streak: u32 = 0;
+    let mut bench_retry_at: Option<Instant> = None;
     info!(
         "job {} started type={:?} interval_ms={} batching={}",
         job.id, job.job_type, job.interval_ms,
@@ -792,6 +988,42 @@ async fn run_job(
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
+        }
+        // Heal dead target-DB connections (e.g. after a target-DB restart) so
+        // buffered rows can be retried instead of failing forever. is_closed()
+        // is a cheap local check; reconnect attempts are bounded by a timeout.
+        for rt in table_runtimes.values_mut() {
+            if rt.target_client.is_closed() {
+                let conn = rt.target_conn.clone();
+                let reconnect = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    target_manager.get_client(&conn),
+                ).await;
+                match reconnect {
+                    Ok(Ok(c)) => {
+                        info!("job {} table {} target db reconnected", job.id, rt.table.id);
+                        rt.target_client = c;
+                    }
+                    Ok(Err(e)) => {
+                        let key = format!("target_reconnect:{}:{}", job.id, rt.table.id);
+                        if let Some(n) = rate_limit_event(&key, 1, Duration::from_secs(15)) {
+                            warn!(
+                                "job {} table {} target db reconnect failed: {} [{} attempt(s) since last report]",
+                                job.id, rt.table.id, e, n
+                            );
+                        }
+                    }
+                    Err(_) => {
+                        let key = format!("target_reconnect:{}:{}", job.id, rt.table.id);
+                        if let Some(n) = rate_limit_event(&key, 1, Duration::from_secs(15)) {
+                            warn!(
+                                "job {} table {} target db reconnect timed out [{} attempt(s) since last report]",
+                                job.id, rt.table.id, n
+                            );
+                        }
+                    }
+                }
+            }
         }
         let start = Instant::now();
         match job.job_type {
@@ -834,6 +1066,10 @@ async fn run_job(
                     read_endpoint_group(tables, &device_manager, &modbus_manager, &mqtt_manager, &job.id)
                 }).collect();
                 let all_results = join_all(group_futures).await;
+                // H-DBC-1: capture the row timestamp once, right after the
+                // device reads complete, and carry it into the write path —
+                // never stamp rows at write-execute time.
+                let cycle_ts = Utc::now().to_rfc3339();
 
                 let mut pending_writes: Vec<(&TableRuntime, FieldMap)> = Vec::new();
                 for group in all_results {
@@ -857,6 +1093,11 @@ async fn run_job(
                     }
                 }
 
+                // Phase 1.5: Evaluate derived fields for each table
+                for (table_rt, values) in pending_writes.iter_mut() {
+                    eval_derived_fields(&job.id, &table_rt.table.id, &table_rt.derived_fields, values);
+                }
+
                 // Phase 2: Write all tables — fire and continue (#4: overlap with next read)
                 if !use_batching {
                     if !pending_writes.is_empty() {
@@ -868,57 +1109,113 @@ async fn run_job(
                             .collect();
                         let table_count = owned_writes.len();
                         let job_id_clone = job.id.clone();
+                        let ts_clone = cycle_ts.clone();
                         pending_write_handle = Some(tokio::spawn(async move {
                             let t_write = Instant::now();
-                            let result = write_all_tables_batch_owned(&owned_writes, &job_id_clone).await;
+                            let result = write_all_tables_batch_owned(&owned_writes, &job_id_clone, &ts_clone).await;
                             let write_ms = t_write.elapsed().as_secs_f64() * 1000.0;
                             (result, write_ms, table_count)
                         }));
                     }
                 } else {
-                    // Buffer all reads
-                    let ts = Utc::now().to_rfc3339();
+                    // Buffer all reads, stamped with the read-time timestamp
                     for (table_rt, values) in pending_writes {
                         let tid = table_rt.table.id.clone();
-                        batch_buffers.entry(tid.clone()).or_default()
-                            .push(BufferedRow { timestamp_utc: ts.clone(), values });
+                        let buf = batch_buffers.entry(tid.clone()).or_default();
+                        buf.push(BufferedRow { timestamp_utc: cycle_ts.clone(), values });
+                        // M11: enforce the hard buffer cap at insert time so the
+                        // buffer cannot grow unbounded during a target-DB outage.
+                        if buf.len() > buffer_cap_rows {
+                            let overflow = buf.len() - buffer_cap_rows;
+                            buf.drain(..overflow);
+                            let key = format!("buffer_drop:{}:{}", job.id, tid);
+                            if let Some(n) = rate_limit_event(&key, overflow as u64, Duration::from_secs(10)) {
+                                error!(
+                                    "job {} table {} buffer cap {} reached — DROPPED {} oldest row(s) (target DB unreachable too long)",
+                                    job.id, tid, buffer_cap_rows, n
+                                );
+                                let _ = append_error_csv(
+                                    &job.id, &tid, "buffer_drop",
+                                    &format!("dropped_rows={} buffer_cap={}", n, buffer_cap_rows),
+                                );
+                            }
+                        }
                         batch_flush_ts.entry(tid).or_insert_with(Instant::now);
                     }
 
+                    // M11: while in failure backoff, skip flush attempts (rows
+                    // keep accumulating under the cap and are retried later).
+                    let in_backoff = flush_backoff_until.map_or(false, |t| Instant::now() < t);
+
                     // Collect all buffers that need flushing
                     let mut to_flush: Vec<(String, Vec<BufferedRow>)> = Vec::new();
-                    for (tid, buf) in batch_buffers.iter_mut() {
-                        if buf.is_empty() { continue; }
-                        let count_trigger = buf.len() as u64 >= job.batch_count;
-                        let time_trigger = job.batch_ms > 0.0
-                            && batch_flush_ts.get(tid).map_or(false, |t| t.elapsed().as_secs_f64() * 1000.0 >= job.batch_ms);
-                        if count_trigger || time_trigger {
-                            to_flush.push((tid.clone(), std::mem::take(buf)));
+                    if !in_backoff {
+                        for (tid, buf) in batch_buffers.iter_mut() {
+                            if buf.is_empty() { continue; }
+                            let count_trigger = buf.len() as u64 >= job.batch_count;
+                            let time_trigger = job.batch_ms > 0.0
+                                && batch_flush_ts.get(tid).map_or(false, |t| t.elapsed().as_secs_f64() * 1000.0 >= job.batch_ms);
+                            if count_trigger || time_trigger {
+                                to_flush.push((tid.clone(), std::mem::take(buf)));
+                            }
                         }
                     }
 
-                    // Flush all due buffers in one batch
+                    // Flush all due buffers (per-table statements; one bad
+                    // table no longer aborts the other tables' rows)
                     let flush_count = to_flush.len();
                     if !to_flush.is_empty() {
+                        let flushed_tids: Vec<String> = to_flush.iter().map(|(tid, _)| tid.clone()).collect();
                         let total_rows: usize = to_flush.iter().map(|(_, rows)| rows.len()).sum();
                         let t_write = Instant::now();
-                        match flush_all_buffered(&table_runtimes, &to_flush, &job.id).await {
-                            Ok(wt) => {
-                                let write_ms = t_write.elapsed().as_secs_f64() * 1000.0;
-                                win_writes_ok += 1;
-                                win_write_ms_sum += write_ms;
-                                win_sql_build_ms_sum += wt.build_ms;
-                                win_db_execute_ms_sum += wt.execute_ms;
-                                info!("Job {} [FLUSH_ALL] tables={} rows={} elapsed_ms={:.2}", job.id, flush_count, total_rows, write_ms);
+                        let (wt, failed) = flush_all_buffered(&table_runtimes, to_flush, &job.id).await;
+                        let write_ms = t_write.elapsed().as_secs_f64() * 1000.0;
+                        if failed.is_empty() {
+                            win_writes_ok += 1;
+                            win_write_ms_sum += write_ms;
+                            win_sql_build_ms_sum += wt.build_ms;
+                            win_db_execute_ms_sum += wt.execute_ms;
+                            flush_fail_streak = 0;
+                            flush_backoff_until = None;
+                            info!("Job {} [FLUSH_ALL] tables={} rows={} elapsed_ms={:.2}", job.id, flush_count, total_rows, write_ms);
+                        } else {
+                            win_writes_err += 1;
+                            // M11: re-queue failed tables' rows (in front, to
+                            // preserve time order) for bounded retry with backoff.
+                            for (tid, mut rows, emsg) in failed {
+                                warn!("job {} table {} flush failed ({} rows re-queued): {}", job.id, tid, rows.len(), emsg);
+                                let _ = append_error_csv(&job.id, &tid, "write", &emsg);
+                                let buf = batch_buffers.entry(tid.clone()).or_default();
+                                let newer = std::mem::take(buf);
+                                rows.extend(newer);
+                                if rows.len() > buffer_cap_rows {
+                                    let overflow = rows.len() - buffer_cap_rows;
+                                    rows.drain(..overflow);
+                                    let key = format!("buffer_drop:{}:{}", job.id, tid);
+                                    if let Some(n) = rate_limit_event(&key, overflow as u64, Duration::from_secs(10)) {
+                                        error!(
+                                            "job {} table {} buffer cap {} reached — DROPPED {} oldest row(s) after flush failure",
+                                            job.id, tid, buffer_cap_rows, n
+                                        );
+                                        let _ = append_error_csv(
+                                            &job.id, &tid, "buffer_drop",
+                                            &format!("dropped_rows={} buffer_cap={}", n, buffer_cap_rows),
+                                        );
+                                    }
+                                }
+                                *buf = rows;
                             }
-                            Err(e) => {
-                                win_writes_err += 1;
-                                let emsg = e.to_string();
-                                warn!("job {} flush all failed: {}", job.id, emsg);
-                                let _ = append_error_csv(&job.id, "ALL", "write", &emsg);
-                            }
+                            flush_fail_streak = flush_fail_streak.saturating_add(1);
+                            let backoff_ms = 500u64
+                                .saturating_mul(1 << flush_fail_streak.min(6))
+                                .min(30_000);
+                            flush_backoff_until = Some(Instant::now() + Duration::from_millis(backoff_ms));
+                            warn!(
+                                "job {} flush failure streak={} — next flush attempt in {}ms",
+                                job.id, flush_fail_streak, backoff_ms
+                            );
                         }
-                        for (tid, _) in &to_flush {
+                        for tid in &flushed_tids {
                             batch_flush_ts.insert(tid.clone(), Instant::now());
                         }
                     }
@@ -952,6 +1249,11 @@ async fn run_job(
                             continue;
                         }
                     };
+                    // H-DBC-1: stamp the row at read time, not at write time
+                    let read_ts = Utc::now().to_rfc3339();
+                    // Evaluate derived fields before trigger evaluation
+                    let mut values = values;
+                    eval_derived_fields(&job.id, &table_id, &table_rt.derived_fields, &mut values);
                     let fire_info = eval_triggers(&triggers, table_id.as_str(), &values, &mut last_values);
                     let should_fire = fire_info.is_some();
                     info!("Job {} [TRIG_EVAL] table={} fired={}", job.id, table_id, should_fire);
@@ -975,7 +1277,7 @@ async fn run_job(
                             }
                         }
                         let t_write = Instant::now();
-                        match write_values_cached(table_rt, &values, &job.id).await {
+                        match write_values_cached(table_rt, &values, &job.id, &read_ts).await {
                             Ok(wt) => {
                                 let write_ms = t_write.elapsed().as_secs_f64() * 1000.0;
                                 win_writes_ok += 1;
@@ -1048,8 +1350,44 @@ async fn run_job(
                     ));
                 }
             }
+            // Heal a dead bench-metrics connection (is_closed() is a cheap
+            // local check) with capped backoff between attempts.
+            if bench_client.is_closed() {
+                let now = Instant::now();
+                if bench_retry_at.map_or(true, |t| now >= t) {
+                    match tokio::time::timeout(
+                        Duration::from_secs(5),
+                        connect_bench_db(&bench_db_url),
+                    ).await {
+                        Ok(Ok(c)) => {
+                            info!("job {} bench metrics db reconnected", job.id);
+                            bench_client = c;
+                            bench_err_streak = 0;
+                            bench_retry_at = None;
+                        }
+                        Ok(Err(e)) => {
+                            bench_err_streak = bench_err_streak.saturating_add(1);
+                            let backoff = meta_backoff(1000, bench_err_streak);
+                            warn!(
+                                "job {} bench metrics db reconnect failed (attempt {}): {} — next attempt in {:.1}s; data writes unaffected",
+                                job.id, bench_err_streak, e, backoff.as_secs_f64()
+                            );
+                            bench_retry_at = Some(now + backoff);
+                        }
+                        Err(_) => {
+                            bench_err_streak = bench_err_streak.saturating_add(1);
+                            let backoff = meta_backoff(1000, bench_err_streak);
+                            warn!(
+                                "job {} bench metrics db reconnect timed out (attempt {}) — next attempt in {:.1}s; data writes unaffected",
+                                job.id, bench_err_streak, backoff.as_secs_f64()
+                            );
+                            bench_retry_at = Some(now + backoff);
+                        }
+                    }
+                }
+            }
             // #9: Fire-and-forget bench DB write — don't block the loop
-            {
+            if !bench_client.is_closed() {
                 let bc = bench_client.clone();
                 let jid = job.id.clone();
                 tokio::spawn(async move {
@@ -1093,12 +1431,13 @@ async fn run_job(
             loop_samples_ms.clear();
         }
         let sleep = if elapsed >= interval { Duration::from_millis(0) } else { interval - elapsed };
-        tokio::time::sleep(sleep).await;
+        // Wake early when stop is requested so graceful shutdown is prompt
+        sleep_unless(sleep, &stop).await;
     }
     // #4: Drain pending background write before stopping
     if let Some(handle) = pending_write_handle.take() {
         match handle.await {
-            Ok((Ok(wt), write_ms, table_count)) => {
+            Ok((Ok(_wt), write_ms, table_count)) => {
                 info!("Job {} [WRITE_ALL_BG_FINAL] tables={} elapsed_ms={:.2}", job.id, table_count, write_ms);
             }
             Ok((Err(e), _, _)) => {
@@ -1109,7 +1448,9 @@ async fn run_job(
             }
         }
     }
-    // Final flush: write any remaining buffered rows before stopping
+    // Final flush: write any remaining buffered rows before stopping.
+    // Retried with short backoff; if rows still cannot be written, the loss
+    // is logged loudly with exact row counts and recorded in the error CSV.
     if use_batching {
         let mut final_flush: Vec<(String, Vec<BufferedRow>)> = Vec::new();
         for (tid, buf) in batch_buffers.iter_mut() {
@@ -1120,30 +1461,41 @@ async fn run_job(
         if !final_flush.is_empty() {
             let total_rows: usize = final_flush.iter().map(|(_, rows)| rows.len()).sum();
             info!("Job {} [FLUSH_FINAL] tables={} rows={}", job.id, final_flush.len(), total_rows);
-            match flush_all_buffered(&table_runtimes, &final_flush, &job.id).await {
-                Ok(_) => {
+            let mut remaining = final_flush;
+            let max_attempts = 3u32;
+            for attempt in 1..=max_attempts {
+                let (_, failed) = flush_all_buffered(&table_runtimes, remaining, &job.id).await;
+                if failed.is_empty() {
                     info!("Job {} [FLUSH_FINAL] OK", job.id);
+                    remaining = Vec::new();
+                    break;
                 }
-                Err(e) => {
-                    warn!("job {} final flush failed: {}", job.id, e);
+                remaining = failed
+                    .into_iter()
+                    .map(|(tid, rows, _)| (tid, rows))
+                    .collect();
+                if attempt < max_attempts {
+                    let retry_rows: usize = remaining.iter().map(|(_, rows)| rows.len()).sum();
+                    warn!(
+                        "job {} final flush attempt {}/{} failed for {} table(s) ({} rows) — retrying",
+                        job.id, attempt, max_attempts, remaining.len(), retry_rows
+                    );
+                    tokio::time::sleep(Duration::from_millis(500 * attempt as u64)).await;
                 }
+            }
+            for (tid, rows) in &remaining {
+                error!(
+                    "job {} table {} FINAL FLUSH FAILED after {} attempts — DROPPED {} row(s)",
+                    job.id, tid, max_attempts, rows.len()
+                );
+                let _ = append_error_csv(
+                    &job.id, tid, "buffer_drop",
+                    &format!("dropped_rows={} reason=final_flush_failed attempts={}", rows.len(), max_attempts),
+                );
             }
         }
     }
     info!("job {} stopped", job.id);
-    Ok(())
-}
-
-async fn process_table(
-    job: &JobDef,
-    table: &TableDef,
-    default_target: &Option<String>,
-    meta_client: &PgClient,
-    device_manager: &Arc<DeviceManager>,
-    target_manager: &Arc<TargetManager>,
-) -> Result<()> {
-    let values = read_table_values(table, default_target, meta_client, device_manager, target_manager).await?;
-    write_values(table, default_target, meta_client, target_manager, &values).await?;
     Ok(())
 }
 
@@ -1218,12 +1570,38 @@ async fn build_table_runtime(
         return Err(anyhow!("unsupported target provider: {}", target.provider));
     }
     let target_client = target_manager.get_client(&target.conn).await?;
-    let mapping = load_mapping_rows(target_client.as_ref(), &table.name).await?;
-    if mapping.is_empty() {
+    let all_mapping = load_mapping_rows(target_client.as_ref(), &table.name).await?;
+    if all_mapping.is_empty() {
         return Ok(None);
     }
-    let device_id = mapping.iter().find_map(|m| m.device_id.clone()).or_else(|| table.device_id.clone());
+
+    // Partition into device-read rows and derived (formula) rows
+    let (derived_rows, device_rows): (Vec<MappingRow>, Vec<MappingRow>) = all_mapping
+        .into_iter()
+        .partition(|m| m.protocol.eq_ignore_ascii_case("derived"));
+
+    // Build derived fields sorted by eval_order (stored in scale column)
+    let mut derived_fields: Vec<DerivedField> = derived_rows
+        .iter()
+        .map(|r| DerivedField {
+            field_key: r.field_key.clone(),
+            formula_str: r.address.clone(),
+            eval_order: r.scale.unwrap_or(0.0) as i32,
+        })
+        .collect();
+    sort_derived_fields(&mut derived_fields);
+
+    // If there are no device rows, we still need a device for non-derived tables
+    if device_rows.is_empty() && derived_fields.is_empty() {
+        return Ok(None);
+    }
+
+    let device_id = device_rows.iter().find_map(|m| m.device_id.clone()).or_else(|| table.device_id.clone());
     let Some(device_id) = device_id else {
+        if !derived_fields.is_empty() {
+            // Pure-derived table with no device rows — should not happen in same-table design
+            warn!("table {} has only derived fields but no device rows, skipping", table.id);
+        }
         return Ok(None);
     };
     let device = load_device(meta_client, &device_id).await?
@@ -1235,33 +1613,29 @@ async fn build_table_runtime(
         None
     };
     let modbus_buckets = if device.protocol.eq_ignore_ascii_case("modbus") {
-        build_modbus_buckets(&mapping)
+        build_modbus_buckets(&device_rows)
     } else {
         Vec::new()
     };
-    // #6: Precompute the INSERT SQL for trigger-mode writes
-    let mut field_keys: Vec<String> = mapping.iter().map(|m| m.field_key.clone()).collect();
-    field_keys.sort();
-    field_keys.dedup();
-    let mut cols = vec![quote_ident("timestamp_utc")];
-    for fk in &field_keys {
-        cols.push(quote_ident(fk));
+
+    if !derived_fields.is_empty() {
+        info!(
+            "table {} has {} derived fields (eval_order: {:?})",
+            table.id,
+            derived_fields.len(),
+            derived_fields.iter().map(|d| (&d.field_key, d.eval_order)).collect::<Vec<_>>()
+        );
     }
-    let placeholders: Vec<String> = (1..=cols.len()).map(|i| format!("${}", i)).collect();
-    let tbl_name = format!("{}.{}", quote_ident("neuract"), quote_ident(&table.name));
-    let cached_insert_sql = Some(format!(
-        "INSERT INTO {} ({}) VALUES ({})",
-        tbl_name, cols.join(","), placeholders.join(",")
-    ));
 
     Ok(Some(TableRuntime {
         table,
         target_client,
-        mapping,
+        target_conn: target.conn.clone(),
+        mapping: device_rows,
         device,
         gateway,
         modbus_buckets,
-        cached_insert_sql,
+        derived_fields,
     }))
 }
 
@@ -1352,13 +1726,15 @@ async fn write_values_cached(
     table_rt: &TableRuntime,
     values: &FieldMap,
     job_id: &str,
+    read_ts: &str,
 ) -> Result<WriteTimings> {
     if values.is_empty() {
         return Ok(WriteTimings { build_ms: 0.0, execute_ms: 0.0 });
     }
     let t_build = Instant::now();
     // #6: Use batch_execute with inline literals (same as batch path) to avoid TEXT type mismatch
-    let ts_literal = pg_escape_literal(&Utc::now().to_rfc3339());
+    // H-DBC-1: timestamp captured at read time by the caller
+    let ts_literal = pg_escape_literal(read_ts);
     let table_name = format!("{}.{}", quote_ident("neuract"), quote_ident(&table_rt.table.name));
     let mut cols = vec![quote_ident("timestamp_utc")];
     let mut vals = vec![ts_literal];
@@ -1386,312 +1762,305 @@ async fn write_values_cached(
     Ok(WriteTimings { build_ms, execute_ms })
 }
 
-const PG_PARAM_LIMIT: usize = 32000;
-
-async fn write_values_batch(
-    table_rt: &TableRuntime,
-    rows: &[BufferedRow],
-    job_id: &str,
-) -> Result<WriteTimings> {
-    if rows.is_empty() {
-        return Ok(WriteTimings { build_ms: 0.0, execute_ms: 0.0 });
-    }
-    let first = &rows[0];
-    let mut field_keys: Vec<String> = first.values.keys().cloned().collect();
-    field_keys.sort();
-    let mut col_names: Vec<String> = vec!["timestamp_utc".to_string()];
-    col_names.extend(field_keys.iter().cloned());
-    let num_cols = col_names.len();
-    let chunk_size = (PG_PARAM_LIMIT / num_cols).max(1);
-    let cols_quoted: Vec<String> = col_names.iter().map(|c| quote_ident(c)).collect();
-    let table_name = format!("{}.{}", quote_ident("neuract"), quote_ident(&table_rt.table.name));
-    let mut total_build_ms = 0.0f64;
-    let mut total_execute_ms = 0.0f64;
-
-    for chunk in rows.chunks(chunk_size) {
-        let t_build = Instant::now();
-        let mut placeholders_all = Vec::with_capacity(chunk.len());
-        let mut params: Vec<String> = Vec::with_capacity(chunk.len() * num_cols);
-        for (row_idx, row) in chunk.iter().enumerate() {
-            let base = row_idx * num_cols;
-            let ph: Vec<String> = (1..=num_cols).map(|i| format!("${}", base + i)).collect();
-            placeholders_all.push(format!("({})", ph.join(",")));
-            params.push(row.timestamp_utc.clone());
-            for fk in &field_keys {
-                params.push(row.values.get(fk).map(|v| v.to_string()).unwrap_or_default());
-            }
-        }
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES {}",
-            table_name,
-            cols_quoted.join(","),
-            placeholders_all.join(",")
-        );
-        let build_ms = t_build.elapsed().as_secs_f64() * 1000.0;
-        info!(
-            "Job {} [WRITE_BATCH_DETAIL] table={} [SQL_BUILD] cols={} rows={} elapsed_ms={:.2}",
-            job_id, table_rt.table.id, num_cols, chunk.len(), build_ms
-        );
-        let t_exec = Instant::now();
-        let types: Vec<Type> = vec![Type::TEXT; params.len()];
-        let stmt = table_rt.target_client.prepare_typed(&sql, &types).await?;
-        let params_ref: Vec<&(dyn ToSql + Sync)> =
-            params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
-        table_rt.target_client.execute(&stmt, &params_ref).await?;
-        let execute_ms = t_exec.elapsed().as_secs_f64() * 1000.0;
-        info!(
-            "Job {} [WRITE_BATCH_DETAIL] table={} [DB_EXECUTE] rows={} elapsed_ms={:.2}",
-            job_id, table_rt.table.id, chunk.len(), execute_ms
-        );
-        total_build_ms += build_ms;
-        total_execute_ms += execute_ms;
-    }
-    Ok(WriteTimings { build_ms: total_build_ms, execute_ms: total_execute_ms })
-}
-
 /// Escape a string value for use as a PostgreSQL literal in batch SQL.
+///
+/// Device-sourced strings can contain anything. Rules:
+/// - NUL bytes are stripped (Postgres rejects NUL in text values outright).
+/// - Single quotes are doubled.
+/// - Backslashes and C0/DEL control characters force the E'...' escape-string
+///   form with backslash escapes, which is correct regardless of the server's
+///   standard_conforming_strings setting.
 fn pg_escape_literal(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+    let mut needs_escape_form = false;
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        match c {
+            '\0' => { /* strip: not representable in PG text */ }
+            '\'' => out.push_str("''"),
+            '\\' => {
+                out.push_str("\\\\");
+                needs_escape_form = true;
+            }
+            '\n' => {
+                out.push_str("\\n");
+                needs_escape_form = true;
+            }
+            '\r' => {
+                out.push_str("\\r");
+                needs_escape_form = true;
+            }
+            '\t' => {
+                out.push_str("\\t");
+                needs_escape_form = true;
+            }
+            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32));
+                needs_escape_form = true;
+            }
+            c => out.push(c),
+        }
+    }
+    if needs_escape_form {
+        format!("E'{}'", out)
+    } else {
+        format!("'{}'", out)
+    }
 }
 
-/// Write one row per table in a single batch_execute transaction.
-/// Groups inserts by target client and sends all INSERTs in one network round-trip.
-async fn write_all_tables_batch(
-    pending: &[(&TableRuntime, FieldMap)],
-    job_id: &str,
-) -> Result<WriteTimings> {
-    if pending.is_empty() {
-        return Ok(WriteTimings { build_ms: 0.0, execute_ms: 0.0 });
-    }
+// --- Rate-limited warning helper ---
 
-    let t_build = Instant::now();
-    let ts_literal = pg_escape_literal(&Utc::now().to_rfc3339());
+static RATE_LIMITER: OnceLock<Mutex<HashMap<String, (u64, Instant)>>> = OnceLock::new();
 
-    // Group by target client pointer identity
-    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (i, (table_rt, _)) in pending.iter().enumerate() {
-        let ptr = Arc::as_ptr(&table_rt.target_client) as usize;
-        groups.entry(ptr).or_default().push(i);
-    }
-
-    let mut total_build_ms = 0.0f64;
-    let mut total_execute_ms = 0.0f64;
-
-    for indices in groups.values() {
-        let client = &pending[indices[0]].0.target_client;
-        let mut sql = String::with_capacity(indices.len() * 512);
-        sql.push_str("BEGIN;\n");
-
-        let mut table_count = 0u32;
-        for &idx in indices {
-            let (table_rt, values) = &pending[idx];
-            if values.is_empty() {
-                continue;
-            }
-            let table_name = format!("{}.{}", quote_ident("neuract"), quote_ident(&table_rt.table.name));
-            let mut cols = vec![quote_ident("timestamp_utc")];
-            let mut vals = vec![ts_literal.clone()];
-            for (k, v) in values {
-                cols.push(quote_ident(k));
-                vals.push(v.to_sql_literal());
-            }
-            sql.push_str(&format!(
-                "INSERT INTO {} ({}) VALUES ({});\n",
-                table_name, cols.join(","), vals.join(",")
-            ));
-            table_count += 1;
+/// Accumulates `count` occurrences for `key`. Returns Some(total_since_last_log)
+/// when the event should be logged now (first occurrence, or `min_interval`
+/// elapsed since last log), otherwise None. Keeps repetitive per-tick warnings
+/// (derived NaN, buffer drops) from flooding the logs while never being silent.
+fn rate_limit_event(key: &str, count: u64, min_interval: Duration) -> Option<u64> {
+    let map = RATE_LIMITER.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = map.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    match map.get_mut(key) {
+        None => {
+            map.insert(key.to_string(), (0, Instant::now()));
+            Some(count)
         }
-        sql.push_str("COMMIT;\n");
-
-        let build_ms = t_build.elapsed().as_secs_f64() * 1000.0;
-        total_build_ms += build_ms;
-
-        info!(
-            "Job {} [WRITE_ALL_BATCH] [SQL_BUILD] tables={} sql_bytes={} elapsed_ms={:.2}",
-            job_id, table_count, sql.len(), build_ms
-        );
-
-        let t_exec = Instant::now();
-        if let Err(e) = client.batch_execute(&sql).await {
-            warn!("Job {} [WRITE_ALL_BATCH] PG error: {} | sql_preview: {}", job_id, e, &sql[..sql.len().min(600)]);
-            return Err(anyhow!("batch write all tables failed: {}", e));
+        Some((pending, last_logged)) => {
+            *pending += count;
+            if last_logged.elapsed() >= min_interval {
+                let total = *pending;
+                *pending = 0;
+                *last_logged = Instant::now();
+                Some(total)
+            } else {
+                None
+            }
         }
-        let execute_ms = t_exec.elapsed().as_secs_f64() * 1000.0;
-        total_execute_ms += execute_ms;
-
-        info!(
-            "Job {} [WRITE_ALL_BATCH] [DB_EXECUTE] tables={} elapsed_ms={:.2}",
-            job_id, table_count, execute_ms
-        );
     }
-
-    Ok(WriteTimings { build_ms: total_build_ms, execute_ms: total_execute_ms })
 }
 
-/// #4: Owned version of write_all_tables_batch for background spawning.
+/// DP2: deterministic derived evaluation order — sort by (eval_order, field_key).
+///
+/// eval_order ties (duplicated orders persisted by older API builds) used to
+/// leave evaluation order dependent on DB row order, which Postgres does not
+/// guarantee without ORDER BY. The field_key tiebreak makes the single-pass
+/// evaluation in eval_derived_fields reproducible across restarts.
+fn sort_derived_fields(fields: &mut [DerivedField]) {
+    fields.sort_by(|a, b| {
+        a.eval_order
+            .cmp(&b.eval_order)
+            .then_with(|| a.field_key.cmp(&b.field_key))
+    });
+}
+
+/// Evaluate derived (formula) fields for one table into `values`.
+///
+/// Consistent non-finite rule (DP4): a derived result that is NaN or +/-Infinity
+/// — or an eval error — produces SQL NULL for that field, is NOT fed into the
+/// meval context (so downstream formulas referencing it also fail to NULL),
+/// and is surfaced via a rate-limited warn + error-CSV row. Never silent.
+fn eval_derived_fields(job_id: &str, table_id: &str, derived: &[DerivedField], values: &mut FieldMap) {
+    if derived.is_empty() {
+        return;
+    }
+    // Build f64 context from device-read values
+    let mut ctx: meval::Context = meval::Context::new();
+    for (k, v) in values.iter() {
+        if let Some(f) = v.as_f64() {
+            ctx.var(k.clone(), f);
+        }
+    }
+    // Single-pass evaluation — derived fields are pre-sorted by eval_order
+    for field in derived {
+        let outcome = meval::eval_str_with_context(&field.formula_str, &ctx);
+        match outcome {
+            Ok(val) if val.is_finite() => {
+                ctx.var(field.field_key.clone(), val);
+                values.insert(field.field_key.clone(), FieldValue::Float(val));
+            }
+            other => {
+                let reason = match other {
+                    Ok(v) => format!("non-finite result ({})", v),
+                    Err(e) => format!("eval error: {}", e),
+                };
+                let rl_key = format!("derived:{}:{}:{}", job_id, table_id, field.field_key);
+                if let Some(n) = rate_limit_event(&rl_key, 1, Duration::from_secs(30)) {
+                    warn!(
+                        "Job {} table {} derived field {} -> NULL ({}) [{} occurrence(s) since last report]",
+                        job_id, table_id, field.field_key, reason, n
+                    );
+                    let _ = append_error_csv(
+                        job_id,
+                        table_id,
+                        "derived",
+                        &format!("field={} {} occurrences={}", field.field_key, reason, n),
+                    );
+                }
+                // NaN serializes to SQL NULL via to_sql_literal
+                values.insert(field.field_key.clone(), FieldValue::Float(f64::NAN));
+            }
+        }
+    }
+}
+
+/// #4: Owned table-write batch for background spawning.
 /// Takes Vec of (client, table_name, values) so it can be `static.
+///
+/// Each table's INSERT runs as its own statement (implicit transaction), so a
+/// bad value in one table fails only that table's row, never the whole group.
+/// Per-table failures are logged + error-CSV'd here; the returned Err is a
+/// summary so the caller's write_err counter still increments.
 async fn write_all_tables_batch_owned(
     pending: &[(Arc<PgClient>, String, FieldMap)],
     job_id: &str,
+    read_ts: &str,
 ) -> Result<WriteTimings> {
     if pending.is_empty() {
         return Ok(WriteTimings { build_ms: 0.0, execute_ms: 0.0 });
     }
 
-    let t_build = Instant::now();
-    let ts_literal = pg_escape_literal(&Utc::now().to_rfc3339());
-
-    // Group by target client pointer identity
-    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (i, (client, _, _)) in pending.iter().enumerate() {
-        let ptr = Arc::as_ptr(client) as usize;
-        groups.entry(ptr).or_default().push(i);
-    }
+    // H-DBC-1: timestamp captured at read time by the caller
+    let ts_literal = pg_escape_literal(read_ts);
 
     let mut total_build_ms = 0.0f64;
     let mut total_execute_ms = 0.0f64;
+    let mut total_tables = 0u32;
+    let mut failed_tables = 0u32;
 
-    for indices in groups.values() {
-        let client = &pending[indices[0]].0;
-        let mut sql = String::with_capacity(indices.len() * 512);
-        sql.push_str("BEGIN;\n");
-
-        let mut table_count = 0u32;
-        for &idx in indices {
-            let (_, ref table_name, ref values) = pending[idx];
-            if values.is_empty() {
-                continue;
-            }
-            let full_name = format!("{}.{}", quote_ident("neuract"), quote_ident(table_name));
-            let mut cols = vec![quote_ident("timestamp_utc")];
-            let mut vals = vec![ts_literal.clone()];
-            for (k, v) in values {
-                cols.push(quote_ident(k));
-                vals.push(v.to_sql_literal());
-            }
-            sql.push_str(&format!(
-                "INSERT INTO {} ({}) VALUES ({});\n",
-                full_name, cols.join(","), vals.join(",")
-            ));
-            table_count += 1;
+    for (client, table_name, values) in pending {
+        if values.is_empty() {
+            continue;
         }
-        sql.push_str("COMMIT;\n");
-
-        let build_ms = t_build.elapsed().as_secs_f64() * 1000.0;
-        total_build_ms += build_ms;
-
-        info!(
-            "Job {} [WRITE_ALL_BATCH] [SQL_BUILD] tables={} sql_bytes={} elapsed_ms={:.2}",
-            job_id, table_count, sql.len(), build_ms
+        total_tables += 1;
+        let t_build = Instant::now();
+        let full_name = format!("{}.{}", quote_ident("neuract"), quote_ident(table_name));
+        let mut cols = vec![quote_ident("timestamp_utc")];
+        let mut vals = vec![ts_literal.clone()];
+        for (k, v) in values {
+            cols.push(quote_ident(k));
+            vals.push(v.to_sql_literal());
+        }
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({});",
+            full_name, cols.join(","), vals.join(",")
         );
+        total_build_ms += t_build.elapsed().as_secs_f64() * 1000.0;
 
         let t_exec = Instant::now();
         if let Err(e) = client.batch_execute(&sql).await {
-            if let Some(d) = e.as_db_error() {
-                eprintln!("MQTT_WRITE_ERR: severity={} code={} message={} detail={:?}", d.severity(), d.code().code(), d.message(), d.detail());
+            failed_tables += 1;
+            let detail = if let Some(d) = e.as_db_error() {
+                format!(
+                    "severity={} code={} message={} detail={:?}",
+                    d.severity(), d.code().code(), d.message(), d.detail()
+                )
             } else {
-                eprintln!("MQTT_WRITE_ERR: {}", e);
-            }
-            eprintln!("MQTT_WRITE_SQL: {}", &sql[..sql.len().min(1500)]);
-            return Err(anyhow!("batch write all tables failed: {}", e));
+                e.to_string()
+            };
+            warn!(
+                "Job {} [WRITE_ALL_BATCH] table {} failed: {} | sql_preview: {}",
+                job_id, table_name, detail, &sql[..sql.len().min(600)]
+            );
+            let _ = append_error_csv(job_id, table_name, "write", &detail);
+            continue;
         }
-        let execute_ms = t_exec.elapsed().as_secs_f64() * 1000.0;
-        total_execute_ms += execute_ms;
-
-        info!(
-            "Job {} [WRITE_ALL_BATCH] [DB_EXECUTE] tables={} elapsed_ms={:.2}",
-            job_id, table_count, execute_ms
-        );
+        total_execute_ms += t_exec.elapsed().as_secs_f64() * 1000.0;
     }
 
+    info!(
+        "Job {} [WRITE_ALL_BATCH] [DB_EXECUTE] tables={} failed={} elapsed_ms={:.2}",
+        job_id, total_tables, failed_tables, total_execute_ms
+    );
+
+    if failed_tables > 0 {
+        return Err(anyhow!(
+            "{}/{} table writes failed (per-table details in log + error CSV)",
+            failed_tables, total_tables
+        ));
+    }
     Ok(WriteTimings { build_ms: total_build_ms, execute_ms: total_execute_ms })
 }
 
-/// Flush multiple tables' buffered rows in a single batch_execute transaction.
+/// Flush multiple tables' buffered rows.
+///
+/// Each table's rows go in ONE multi-row INSERT executed as its own implicit
+/// transaction — per-table atomicity is preserved, but one bad value (or one
+/// table's error) no longer rolls back every other table's rows.
+///
+/// Returns the timings plus the tables that failed, with their rows handed
+/// back to the caller for re-queueing (M11) and the error message.
 async fn flush_all_buffered(
     table_runtimes: &HashMap<String, TableRuntime>,
-    to_flush: &[(String, Vec<BufferedRow>)],
+    to_flush: Vec<(String, Vec<BufferedRow>)>,
     job_id: &str,
-) -> Result<WriteTimings> {
+) -> (WriteTimings, Vec<(String, Vec<BufferedRow>, String)>) {
+    let mut timings = WriteTimings { build_ms: 0.0, execute_ms: 0.0 };
+    let mut failed: Vec<(String, Vec<BufferedRow>, String)> = Vec::new();
     if to_flush.is_empty() {
-        return Ok(WriteTimings { build_ms: 0.0, execute_ms: 0.0 });
+        return (timings, failed);
     }
 
-    let t_build = Instant::now();
+    let mut flushed_tables = 0usize;
+    let mut flushed_rows = 0usize;
 
-    // Group by target client pointer identity
-    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (i, (tid, _)) in to_flush.iter().enumerate() {
-        if let Some(table_rt) = table_runtimes.get(tid) {
-            let ptr = Arc::as_ptr(&table_rt.target_client) as usize;
-            groups.entry(ptr).or_default().push(i);
+    for (tid, rows) in to_flush {
+        if rows.is_empty() {
+            continue;
         }
-    }
-
-    let mut total_build_ms = 0.0f64;
-    let mut total_execute_ms = 0.0f64;
-
-    for indices in groups.values() {
-        let first_tid = &to_flush[indices[0]].0;
-        let client = &table_runtimes[first_tid].target_client;
-        let mut sql = String::with_capacity(8192);
-        sql.push_str("BEGIN;\n");
-
-        let mut total_rows = 0usize;
-        for &idx in indices {
-            let (tid, rows) = &to_flush[idx];
-            let table_rt = match table_runtimes.get(tid) {
-                Some(rt) => rt,
-                None => continue,
-            };
-            if rows.is_empty() {
+        let table_rt = match table_runtimes.get(&tid) {
+            Some(rt) => rt,
+            None => {
+                failed.push((tid, rows, "table runtime not found".to_string()));
                 continue;
             }
-            let first = &rows[0];
-            let mut field_keys: Vec<String> = first.values.keys().cloned().collect();
-            field_keys.sort();
-            let mut col_names = vec!["timestamp_utc".to_string()];
-            col_names.extend(field_keys.iter().cloned());
-            let cols_quoted: Vec<String> = col_names.iter().map(|c| quote_ident(c)).collect();
-            let table_name = format!("{}.{}", quote_ident("neuract"), quote_ident(&table_rt.table.name));
+        };
 
-            let mut value_rows = Vec::with_capacity(rows.len());
-            for row in rows {
-                let mut vals = vec![pg_escape_literal(&row.timestamp_utc)];
-                for fk in &field_keys {
-                    vals.push(
-                        row.values.get(fk)
-                            .map(|v| v.to_sql_literal())
-                            .unwrap_or_else(|| "NULL".to_string())
-                    );
-                }
-                value_rows.push(format!("({})", vals.join(",")));
+        let t_build = Instant::now();
+        let first = &rows[0];
+        let mut field_keys: Vec<String> = first.values.keys().cloned().collect();
+        field_keys.sort();
+        let mut col_names = vec!["timestamp_utc".to_string()];
+        col_names.extend(field_keys.iter().cloned());
+        let cols_quoted: Vec<String> = col_names.iter().map(|c| quote_ident(c)).collect();
+        let table_name = format!("{}.{}", quote_ident("neuract"), quote_ident(&table_rt.table.name));
+
+        let mut value_rows = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let mut vals = vec![pg_escape_literal(&row.timestamp_utc)];
+            for fk in &field_keys {
+                vals.push(
+                    row.values.get(fk)
+                        .map(|v| v.to_sql_literal())
+                        .unwrap_or_else(|| "NULL".to_string())
+                );
             }
-
-            sql.push_str(&format!(
-                "INSERT INTO {} ({}) VALUES {};\n",
-                table_name, cols_quoted.join(","), value_rows.join(",")
-            ));
-            total_rows += rows.len();
+            value_rows.push(format!("({})", vals.join(",")));
         }
-        sql.push_str("COMMIT;\n");
 
-        let build_ms = t_build.elapsed().as_secs_f64() * 1000.0;
-        total_build_ms += build_ms;
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES {};",
+            table_name, cols_quoted.join(","), value_rows.join(",")
+        );
+        timings.build_ms += t_build.elapsed().as_secs_f64() * 1000.0;
 
         let t_exec = Instant::now();
-        client.batch_execute(&sql).await
-            .context("batch flush all tables failed")?;
-        let execute_ms = t_exec.elapsed().as_secs_f64() * 1000.0;
-        total_execute_ms += execute_ms;
-
-        info!(
-            "Job {} [FLUSH_ALL_BATCH] [DB_EXECUTE] tables={} rows={} elapsed_ms={:.2}",
-            job_id, indices.len(), total_rows, execute_ms
-        );
+        match table_rt.target_client.batch_execute(&sql).await {
+            Ok(()) => {
+                timings.execute_ms += t_exec.elapsed().as_secs_f64() * 1000.0;
+                flushed_tables += 1;
+                flushed_rows += rows.len();
+            }
+            Err(e) => {
+                let emsg = e.to_string();
+                failed.push((tid, rows, emsg));
+            }
+        }
     }
 
-    Ok(WriteTimings { build_ms: total_build_ms, execute_ms: total_execute_ms })
+    info!(
+        "Job {} [FLUSH_ALL_BATCH] [DB_EXECUTE] tables={} rows={} failed_tables={} elapsed_ms={:.2}",
+        job_id, flushed_tables, flushed_rows, failed.len(), timings.execute_ms
+    );
+
+    (timings, failed)
 }
 
 fn bench_log_dir() -> PathBuf {
@@ -1767,7 +2136,19 @@ fn append_error_csv(
     let log_dir = bench_log_dir();
     fs::create_dir_all(&log_dir).context("create error log dir")?;
     let path = log_dir.join(ERROR_LOG_FILENAME);
-    let _guard = error_csv_lock().lock().unwrap();
+    let _guard = error_csv_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Bounded: roll to a single .1 backup once the CSV exceeds the cap
+    // (LOGGER_ERROR_CSV_MAX_MB, default 50 MB) so it can never grow unbounded.
+    let csv_cap = env::var("LOGGER_ERROR_CSV_MAX_MB")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(|mb| mb.max(1) * 1024 * 1024)
+        .unwrap_or(50 * 1024 * 1024);
+    if fs::metadata(&path).map(|m| m.len() >= csv_cap).unwrap_or(false) {
+        let backup = format!("{}.1", path.display());
+        let _ = fs::remove_file(&backup);
+        let _ = fs::rename(&path, &backup);
+    }
     let needs_header = match fs::metadata(&path) {
         Ok(meta) => meta.len() == 0,
         Err(_) => true,
@@ -1794,128 +2175,6 @@ fn percentile_ms(samples: &mut [f64], pct: f64) -> Option<f64> {
     samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let idx = ((pct / 100.0) * ((samples.len() - 1) as f64)).round() as usize;
     samples.get(idx).copied()
-}
-
-async fn read_table_values(
-    table: &TableDef,
-    default_target: &Option<String>,
-    meta_client: &PgClient,
-    device_manager: &Arc<DeviceManager>,
-    target_manager: &Arc<TargetManager>,
-) -> Result<FieldMap> {
-    let target_id = table.db_target_id.clone().or_else(|| default_target.clone());
-    let target_id = target_id.ok_or_else(|| anyhow!("no db target for table {}", table.id))?;
-    let target = load_target(meta_client, &target_id).await?
-        .ok_or_else(|| anyhow!("db target not found: {}", target_id))?;
-    if !is_postgres_provider(&target.provider) {
-        return Err(anyhow!("unsupported target provider: {}", target.provider));
-    }
-    let target_client = target_manager.get_client(&target.conn).await?;
-    let mapping = load_mapping_rows(target_client.as_ref(), &table.name).await?;
-    if mapping.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let device_id = mapping.iter().find_map(|m| m.device_id.clone()).or_else(|| table.device_id.clone());
-    let device_id = device_id.ok_or_else(|| anyhow!("device not bound for table {}", table.id))?;
-    let device = load_device(meta_client, &device_id).await?
-        .ok_or_else(|| anyhow!("device not found: {}", device_id))?;
-    match device.protocol.to_lowercase().as_str() {
-        "opcua" => read_opcua_values_blocking(device_manager.clone(), device, mapping, "unknown".to_string()).await.map(|(v, _)| v),
-        "modbus" => {
-            let gateway = if let Some(ref gw_id) = device.gateway_id {
-                load_gateway(meta_client, gw_id).await.unwrap_or(None)
-            } else {
-                None
-            };
-            let mgr = ModbusManager::new();
-            let buckets = build_modbus_buckets(&mapping);
-            read_modbus_values(&mgr, &device, gateway.as_ref(), &buckets, "unknown").await.map(|(v, _)| v)
-        }
-        "mqtt" => {
-            let mgr = Arc::new(MqttManager::new());
-            read_mqtt_values(&mgr, &device, &mapping, "unknown").await.map(|(v, _)| v)
-        }
-        other => Err(anyhow!("device protocol not supported: {}", other)),
-    }
-}
-
-async fn write_values(
-    table: &TableDef,
-    default_target: &Option<String>,
-    meta_client: &PgClient,
-    target_manager: &Arc<TargetManager>,
-    values: &FieldMap,
-) -> Result<()> {
-    if values.is_empty() {
-        return Ok(());
-    }
-    let target_id = table.db_target_id.clone().or_else(|| default_target.clone());
-    let Some(target_id) = target_id else {
-        return Err(anyhow!("no db target for table {}", table.id));
-    };
-    let target = load_target(meta_client, &target_id).await?
-        .ok_or_else(|| anyhow!("db target not found: {}", target_id))?;
-    let target_client = target_manager.get_client(&target.conn).await?;
-
-    let mut cols = Vec::new();
-    let mut params: Vec<String> = Vec::new();
-    cols.push(quote_ident("timestamp_utc"));
-    params.push(Utc::now().to_rfc3339());
-    for (k, v) in values {
-        cols.push(quote_ident(k));
-        params.push(v.to_string());
-    }
-    let placeholders: Vec<String> = (1..=cols.len()).map(|i| format!("${}", i)).collect();
-    let table_name = format!("{}.{}", quote_ident("neuract"), quote_ident(&table.name));
-    let sql = format!("INSERT INTO {} ({}) VALUES ({})", table_name, cols.join(","), placeholders.join(","));
-    let types: Vec<Type> = vec![Type::TEXT; params.len()];
-    let stmt = target_client.prepare_typed(&sql, &types).await?;
-    let params_ref: Vec<&(dyn ToSql + Sync)> =
-        params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
-    target_client.execute(&stmt, &params_ref).await?;
-    Ok(())
-}
-
-fn parse_param_value(raw: &str) -> Box<dyn ToSql + Sync + Send> {
-    if raw.eq_ignore_ascii_case("true") {
-        return Box::new(true);
-    }
-    if raw.eq_ignore_ascii_case("false") {
-        return Box::new(false);
-    }
-    if let Ok(n) = raw.parse::<i64>() {
-        return Box::new(n);
-    }
-    if let Ok(n) = raw.parse::<f64>() {
-        return Box::new(n);
-    }
-    Box::new(raw.to_string())
-}
-
-fn parse_param_value_for_type(raw: &str, data_type: Option<&str>) -> Box<dyn ToSql + Sync + Send> {
-    let dt = data_type.unwrap_or("").to_lowercase();
-    if dt.contains("bool") {
-        if raw.eq_ignore_ascii_case("true") {
-            return Box::new(true);
-        }
-        if raw.eq_ignore_ascii_case("false") {
-            return Box::new(false);
-        }
-        if let Ok(n) = raw.parse::<i64>() {
-            return Box::new(n != 0);
-        }
-    }
-    if dt.contains("float") || dt.contains("double") || dt.contains("real") || dt.contains("numeric") {
-        if let Ok(n) = raw.parse::<f64>() {
-            return Box::new(n);
-        }
-    }
-    if dt.contains("int") || dt.contains("uint") || dt.contains("short") || dt.contains("long") {
-        if let Ok(n) = raw.parse::<i64>() {
-            return Box::new(n);
-        }
-    }
-    parse_param_value(raw)
 }
 
 async fn send_trigger_notification(
@@ -1970,7 +2229,6 @@ fn eval_triggers(
                 op: tr.op.clone(),
                 current_value: cur,
                 previous_value: prev,
-                threshold: tr.value,
             });
         }
     }
@@ -2133,7 +2391,7 @@ async fn load_default_target(client: &PgClient) -> Result<Option<String>> {
 async fn load_target(client: &PgClient, target_id: &str) -> Result<Option<DbTarget>> {
     let rows = client
         .query(
-            "SELECT id,provider,conn FROM app_db_targets WHERE id=$1",
+            "SELECT provider,conn FROM app_db_targets WHERE id=$1",
             &[&target_id],
         )
         .await?;
@@ -2142,7 +2400,6 @@ async fn load_target(client: &PgClient, target_id: &str) -> Result<Option<DbTarg
     }
     let r = &rows[0];
     Ok(Some(DbTarget {
-        id: r.get("id"),
         provider: r.get("provider"),
         conn: r.get("conn"),
     }))
@@ -2177,7 +2434,7 @@ async fn load_device(client: &PgClient, device_id: &str) -> Result<Option<Device
 async fn load_gateway(client: &PgClient, gateway_id: &str) -> Result<Option<Gateway>> {
     let rows = client
         .query(
-            "SELECT id,name,host FROM app_gateways WHERE id=$1",
+            "SELECT host FROM app_gateways WHERE id=$1",
             &[&gateway_id],
         )
         .await?;
@@ -2186,18 +2443,18 @@ async fn load_gateway(client: &PgClient, gateway_id: &str) -> Result<Option<Gate
     }
     let r = &rows[0];
     Ok(Some(Gateway {
-        id: r.get("id"),
-        name: r.try_get("name").ok().flatten(),
         host: r.try_get("host").ok().flatten(),
     }))
 }
 
 async fn load_mapping_rows(target_client: &PgClient, table_name: &str) -> Result<Vec<MappingRow>> {
-    // Try with encoding column first; fall back without it for older schemas
+    // Try with encoding column first; fall back without it for older schemas.
+    // DP2: ORDER BY field_key — without it Postgres row order is unspecified
+    // and derived evaluation order could differ between restarts.
     let rows_result = target_client
         .query(
-            "SELECT table_name,field_key,protocol,address,data_type,scale,deadband,device_id,encoding \
-             FROM neuract.device_mappings WHERE table_name=$1",
+            "SELECT table_name,field_key,protocol,address,data_type,scale,device_id,encoding \
+             FROM neuract.device_mappings WHERE table_name=$1 ORDER BY field_key",
             &[&table_name],
         )
         .await;
@@ -2206,8 +2463,8 @@ async fn load_mapping_rows(target_client: &PgClient, table_name: &str) -> Result
         Err(_) => {
             let r = target_client
                 .query(
-                    "SELECT table_name,field_key,protocol,address,data_type,scale,deadband,device_id \
-                     FROM neuract.device_mappings WHERE table_name=$1",
+                    "SELECT table_name,field_key,protocol,address,data_type,scale,device_id \
+                     FROM neuract.device_mappings WHERE table_name=$1 ORDER BY field_key",
                     &[&table_name],
                 )
                 .await?;
@@ -2231,7 +2488,6 @@ async fn load_mapping_rows(target_client: &PgClient, table_name: &str) -> Result
             data_type: r.get("data_type"),
             encoding: enc,
             scale: read_optional_f64(&r, "scale"),
-            deadband: read_optional_f64(&r, "deadband"),
             device_id: r.get("device_id"),
         });
     }
@@ -2341,12 +2597,12 @@ impl ModbusManager {
     }
 
     fn drop_context(&self, key: &str) {
-        self.contexts.lock().unwrap().remove(key);
+        self.contexts.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(key);
     }
 
     /// #7: Drop stale connections that have been idle too long
     fn drop_stale(&self) {
-        let mut map = self.contexts.lock().unwrap();
+        let mut map = self.contexts.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let max_idle = self.max_idle;
         map.retain(|_, (_, last_used)| last_used.elapsed() < max_idle);
     }
@@ -2380,7 +2636,7 @@ impl MqttManager {
     ) -> Result<Arc<Mutex<HashMap<String, serde_json::Value>>>> {
         // Return existing connection if the background task is still alive
         {
-            let brokers = self.brokers.lock().unwrap();
+            let brokers = self.brokers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(state) = brokers.get(broker_key) {
                 if !state._task.is_finished() {
                     return Ok(state.cache.clone());
@@ -2410,7 +2666,7 @@ impl MqttManager {
         info!("MQTT connected to broker {} topic={}", broker_key, topic);
         mqtt_log("INFO", &format!("CONNECTED broker={} topic={}", broker_key, topic));
         let state = BrokerState { cache: cache.clone(), _client: client, _task: task };
-        self.brokers.lock().unwrap().insert(broker_key.to_string(), state);
+        self.brokers.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(broker_key.to_string(), state);
         Ok(cache)
     }
 }
@@ -2429,7 +2685,7 @@ async fn mqtt_broker_task(
                         if let Some(gw) = payload.get("gw").and_then(|v| v.as_str()) {
                             let meter_count = payload.get("meters").and_then(|m| m.as_array()).map(|a| a.len()).unwrap_or(0);
                             mqtt_log("DATA", &format!("broker={} gw={} meters={}", broker_key, gw, meter_count));
-                            cache.lock().unwrap().insert(gw.to_string(), payload);
+                            cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(gw.to_string(), payload);
                         }
                     }
                     Err(e) => {
@@ -2521,7 +2777,7 @@ async fn read_mqtt_values(
 
     // Snapshot the latest payload for this gw label (lock held briefly)
     let payload = {
-        let map = cache.lock().unwrap();
+        let map = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         map.get(&mqtt_gw).cloned()
     };
     let payload = match payload {
@@ -2643,7 +2899,7 @@ async fn read_modbus_values(
 
     // Try to take the cached context (we must own it for async calls)
     let mut ctx = {
-        let mut map = modbus_manager.contexts.lock().unwrap();
+        let mut map = modbus_manager.contexts.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         map.remove(&key).map(|(c, _)| c)
     };
 
@@ -2679,68 +2935,124 @@ async fn read_modbus_values(
 
     for bucket in buckets {
         let t_bucket = Instant::now();
-        let read_result = match bucket.reg_type {
-            RegisterType::HoldingRegister => ctx.read_holding_registers(bucket.start_addr, bucket.read_count).await,
-            RegisterType::InputRegister => ctx.read_input_registers(bucket.start_addr, bucket.read_count).await,
-            RegisterType::Coil | RegisterType::DiscreteInput => {
-                // Coils/discrete inputs return bits, not registers — read as holding for now
-                // TODO: implement read_coils / read_discrete_inputs with bit decoding
-                warn!("modbus coil/discrete read not yet implemented, falling back to holding registers");
-                ctx.read_holding_registers(bucket.start_addr, bucket.read_count).await
-            }
-        };
-        match read_result {
-            Ok(Ok(regs)) => {
-                info!(
-                    "Job {} [READ_MAPPING] [MODBUS_BUCKET] start={} count={} got={} elapsed_ms={:.2}",
-                    job_id, bucket.start_addr, bucket.read_count, regs.len(),
-                    t_bucket.elapsed().as_secs_f64() * 1000.0
-                );
-                for field in &bucket.fields {
-                    let offset = (field.address - bucket.start_addr) as usize;
-                    let end = offset + field.reg_count as usize;
-                    if end > regs.len() {
-                        warn!(
-                            "modbus bucket field beyond read range field={} addr={} end={} regs_len={}",
-                            field.field_key, field.address, end, regs.len()
+        match bucket.reg_type {
+            RegisterType::HoldingRegister | RegisterType::InputRegister => {
+                let read_result = match bucket.reg_type {
+                    RegisterType::HoldingRegister => ctx.read_holding_registers(bucket.start_addr, bucket.read_count).await,
+                    _ => ctx.read_input_registers(bucket.start_addr, bucket.read_count).await,
+                };
+                match read_result {
+                    Ok(Ok(regs)) => {
+                        info!(
+                            "Job {} [READ_MAPPING] [MODBUS_BUCKET] start={} count={} got={} elapsed_ms={:.2}",
+                            job_id, bucket.start_addr, bucket.read_count, regs.len(),
+                            t_bucket.elapsed().as_secs_f64() * 1000.0
                         );
-                        continue;
+                        for field in &bucket.fields {
+                            let offset = (field.address - bucket.start_addr) as usize;
+                            let end = offset + field.reg_count as usize;
+                            if end > regs.len() {
+                                warn!(
+                                    "modbus bucket field beyond read range field={} addr={} end={} regs_len={}",
+                                    field.field_key, field.address, end, regs.len()
+                                );
+                                continue;
+                            }
+                            let field_regs = &regs[offset..end];
+                            if let Some(mut val) = decode_registers(field_regs, &field.encoding, byte_order) {
+                                // Post-decode coercion
+                                if field.encoding == "bool16" {
+                                    val = if val != 0.0 { 1.0 } else { 0.0 };
+                                }
+                                // Apply scale (computed in f64)
+                                if let Some(scale) = field.scale {
+                                    val *= scale;
+                                }
+                                // H-RUST-2: float32-encoded values keep f32 precision
+                                // so serialization round-trips ("229.4", not
+                                // "229.39999389648438"). Scale math stays in f64,
+                                // then rounds to f32 — matching the REAL columns.
+                                let is_f32_origin = modbus_encoding_info(&field.encoding).1 == "f32";
+                                let fv = if field.encoding == "uint16_enum" {
+                                    FieldValue::Int(val as i64)
+                                } else if field.encoding == "bool16" {
+                                    FieldValue::Bool(val != 0.0)
+                                } else if is_f32_origin {
+                                    FieldValue::Float32(val as f32)
+                                } else {
+                                    FieldValue::Float(val)
+                                };
+                                values.insert(field.field_key.clone(), fv);
+                            }
+                        }
                     }
-                    let field_regs = &regs[offset..end];
-                    if let Some(mut val) = decode_registers(field_regs, &field.encoding, byte_order) {
-                        // Post-decode coercion
-                        if field.encoding == "bool16" {
-                            val = if val != 0.0 { 1.0 } else { 0.0 };
-                        }
-                        // Apply scale
-                        if let Some(scale) = field.scale {
-                            val *= scale;
-                        }
-                        let fv = if field.encoding == "uint16_enum" {
-                            FieldValue::Int(val as i64)
-                        } else if field.encoding == "bool16" {
-                            FieldValue::Bool(val != 0.0)
-                        } else {
-                            FieldValue::Float(val)
-                        };
-                        values.insert(field.field_key.clone(), fv);
+                    Ok(Err(exception)) => {
+                        warn!(
+                            "modbus bucket exception start={} count={} unit={} err={:?}",
+                            bucket.start_addr, bucket.read_count, unit_id, exception
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "modbus bucket read error start={} count={} unit={} err={}",
+                            bucket.start_addr, bucket.read_count, unit_id, e
+                        );
+                        // On connection error, don't cache the broken context
+                        modbus_manager.drop_context(&key);
+                        return Err(anyhow!("modbus read failed: {}", e));
                     }
                 }
             }
-            Ok(Err(exception)) => {
-                warn!(
-                    "modbus bucket exception start={} count={} unit={} err={:?}",
-                    bucket.start_addr, bucket.read_count, unit_id, exception
-                );
-            }
-            Err(e) => {
-                warn!(
-                    "modbus bucket read error start={} count={} unit={} err={}",
-                    bucket.start_addr, bucket.read_count, unit_id, e
-                );
-                // On connection error, don't cache the broken context
-                modbus_manager.drop_context(&key);
-                return Err(anyhow!("modbus read failed: {}", e));
+            // M-RUST-5: coils (FC1) and discrete inputs (FC2) are bit-valued —
+            // read them with the proper function codes instead of silently
+            // falling back to holding registers (which returned wrong data).
+            RegisterType::Coil | RegisterType::DiscreteInput => {
+                let read_result = match bucket.reg_type {
+                    RegisterType::Coil => ctx.read_coils(bucket.start_addr, bucket.read_count).await,
+                    _ => ctx.read_discrete_inputs(bucket.start_addr, bucket.read_count).await,
+                };
+                match read_result {
+                    Ok(Ok(bits)) => {
+                        info!(
+                            "Job {} [READ_MAPPING] [MODBUS_BUCKET] type={:?} start={} count={} got={} elapsed_ms={:.2}",
+                            job_id, bucket.reg_type, bucket.start_addr, bucket.read_count, bits.len(),
+                            t_bucket.elapsed().as_secs_f64() * 1000.0
+                        );
+                        for field in &bucket.fields {
+                            let offset = (field.address - bucket.start_addr) as usize;
+                            match bits.get(offset) {
+                                Some(&bit) => {
+                                    values.insert(field.field_key.clone(), FieldValue::Bool(bit));
+                                }
+                                None => {
+                                    warn!(
+                                        "modbus coil/discrete field beyond read range field={} addr={} bits_len={}",
+                                        field.field_key, field.address, bits.len()
+                                    );
+                                    let _ = append_error_csv(
+                                        job_id, &field.field_key, "read",
+                                        &format!("coil/discrete bit at addr {} outside response ({} bits)", field.address, bits.len()),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Ok(Err(exception)) => {
+                        warn!(
+                            "modbus coil/discrete exception type={:?} start={} count={} unit={} err={:?}",
+                            bucket.reg_type, bucket.start_addr, bucket.read_count, unit_id, exception
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "modbus coil/discrete read error type={:?} start={} count={} unit={} err={}",
+                            bucket.reg_type, bucket.start_addr, bucket.read_count, unit_id, e
+                        );
+                        // On connection error, don't cache the broken context
+                        modbus_manager.drop_context(&key);
+                        return Err(anyhow!("modbus coil/discrete read failed: {}", e));
+                    }
+                }
             }
         }
     }
@@ -2751,7 +3063,7 @@ async fn read_modbus_values(
     );
 
     // Put context back for reuse with timestamp
-    modbus_manager.contexts.lock().unwrap().insert(key, (ctx, Instant::now()));
+    modbus_manager.contexts.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, (ctx, Instant::now()));
 
     info!(
         "Job {} [READ_MAPPING] [TOTAL] proto=modbus fields={} elapsed_ms={:.2}",
@@ -2762,7 +3074,7 @@ async fn read_modbus_values(
 
 fn read_opcua_value(session: &Arc<Mutex<DeviceSession>>, row: &MappingRow, job_id: &str) -> Result<Option<FieldValue>> {
     let t_field = Instant::now();
-    let mut sess = session.lock().unwrap();
+    let mut sess = session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let node_id = if let Some(node_id) = sess.nodes.get(&row.address) {
         node_id.clone()
     } else {
@@ -2784,7 +3096,12 @@ fn read_opcua_value(session: &Arc<Mutex<DeviceSession>>, row: &MappingRow, job_i
     let mut val = dv.value.as_ref().and_then(variant_to_field_value);
     if let (Some(fv), Some(scale)) = (&mut val, row.scale) {
         if let Some(n) = fv.as_f64() {
-            *fv = FieldValue::Float(n * scale);
+            // Preserve f32 origin through scaling (scale math in f64, then
+            // round back to f32) so SQL serialization stays shortest-roundtrip.
+            *fv = match fv {
+                FieldValue::Float32(_) => FieldValue::Float32((n * scale) as f32),
+                _ => FieldValue::Float(n * scale),
+            };
         }
     }
     sess.last_used = Instant::now();
@@ -2805,7 +3122,7 @@ async fn read_opcua_values_blocking(
         let t_fn = Instant::now();
         let t_conn = Instant::now();
         let session = device_manager.get_session(&device)?;
-        let endpoint = session.lock().unwrap().endpoint.clone();
+        let endpoint = session.lock().unwrap_or_else(std::sync::PoisonError::into_inner).endpoint.clone();
         let connect_ms = t_conn.elapsed().as_secs_f64() * 1000.0;
         info!(
             "Job {} [READ_MAPPING] [OPCUA_CONNECT] endpoint={} elapsed_ms={:.2}",
@@ -2848,7 +3165,8 @@ fn variant_to_field_value(v: &Variant) -> Option<FieldValue> {
         Variant::UInt32(b) => Some(FieldValue::Int(*b as i64)),
         Variant::Int64(b) => Some(FieldValue::Int(*b as i64)),
         Variant::UInt64(b) => Some(FieldValue::Int(*b as i64)),
-        Variant::Float(b) => Some(FieldValue::Float(*b as f64)),
+        // H-RUST-2: OPC UA Float is f32 — keep f32 precision for serialization
+        Variant::Float(b) => Some(FieldValue::Float32(*b)),
         Variant::Double(b) => Some(FieldValue::Float(*b)),
         Variant::String(s) => {
             if s.is_null() {
@@ -2876,6 +3194,32 @@ fn normalize_endpoint(ep: &str) -> String {
 
 fn quote_ident(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+/// Mask the password component of a connection string for logging.
+/// Mirrors the Python redact_dsn helper: user:secret@host -> user:***@host,
+/// password=secret -> password=***. Host/db stay visible.
+fn redact_dsn(dsn: &str) -> String {
+    // URL form: scheme://user:password@host/...
+    if let Some(scheme_end) = dsn.find("://") {
+        let (scheme, rest) = dsn.split_at(scheme_end + 3);
+        if let Some(at) = rest.find('@') {
+            let creds = &rest[..at];
+            if let Some(colon) = creds.find(':') {
+                return format!("{}{}:***{}", scheme, &creds[..colon], &rest[at..]);
+            }
+        }
+    }
+    // Keyword form: password=secret (space- or end-delimited)
+    if let Some(idx) = dsn.to_ascii_lowercase().find("password=") {
+        let val_start = idx + "password=".len();
+        let val_end = dsn[val_start..]
+            .find(char::is_whitespace)
+            .map(|i| val_start + i)
+            .unwrap_or(dsn.len());
+        return format!("{}***{}", &dsn[..val_start], &dsn[val_end..]);
+    }
+    dsn.to_string()
 }
 
 fn params_load(raw: &str) -> serde_json::Value {
@@ -2924,6 +3268,376 @@ fn dpapi_unprotect(_data: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- pg_escape_literal ---
+
+    #[test]
+    fn escape_plain_string() {
+        assert_eq!(pg_escape_literal("hello"), "'hello'");
+    }
+
+    #[test]
+    fn escape_empty_string() {
+        assert_eq!(pg_escape_literal(""), "''");
+    }
+
+    #[test]
+    fn escape_single_quote_doubled() {
+        assert_eq!(pg_escape_literal("it's"), "'it''s'");
+        assert_eq!(pg_escape_literal("''"), "''''''");
+    }
+
+    #[test]
+    fn escape_nul_byte_stripped() {
+        // Postgres rejects NUL in text — must be stripped, not passed through
+        assert_eq!(pg_escape_literal("ab\0cd"), "'abcd'");
+        assert_eq!(pg_escape_literal("\0"), "''");
+    }
+
+    #[test]
+    fn escape_backslash_uses_escape_form() {
+        assert_eq!(pg_escape_literal("a\\b"), "E'a\\\\b'");
+    }
+
+    #[test]
+    fn escape_newline_tab_cr() {
+        assert_eq!(pg_escape_literal("a\nb"), "E'a\\nb'");
+        assert_eq!(pg_escape_literal("a\tb"), "E'a\\tb'");
+        assert_eq!(pg_escape_literal("a\rb"), "E'a\\rb'");
+    }
+
+    #[test]
+    fn escape_other_control_chars_hex() {
+        assert_eq!(pg_escape_literal("a\x01b"), "E'a\\x01b'");
+        assert_eq!(pg_escape_literal("a\x7fb"), "E'a\\x7fb'");
+    }
+
+    #[test]
+    fn escape_mixed_quote_nul_control() {
+        // quote doubling + NUL strip + control escape in one value
+        assert_eq!(pg_escape_literal("o'\0k\n"), "E'o''k\\n'");
+    }
+
+    #[test]
+    fn escape_unicode_passthrough() {
+        assert_eq!(pg_escape_literal("température °C"), "'température °C'");
+    }
+
+    // --- to_sql_literal: f32 vs f64 formatting, non-finite -> NULL ---
+
+    #[test]
+    fn sql_literal_f32_shortest_roundtrip() {
+        // The H-RUST-2 case: f32 229.4 widened to f64 prints 229.39999389648438;
+        // Float32 must print the shortest f32 roundtrip instead.
+        assert_eq!(FieldValue::Float32(229.4_f32).to_sql_literal(), "229.4");
+        assert_eq!(FieldValue::Float32(0.1_f32).to_sql_literal(), "0.1");
+        // Same value via the old widening path shows the phantom digits
+        assert_eq!(FieldValue::Float(229.4_f32 as f64).to_sql_literal(), "229.39999389648438");
+    }
+
+    #[test]
+    fn sql_literal_f64_untouched() {
+        assert_eq!(FieldValue::Float(0.1).to_sql_literal(), "0.1");
+        assert_eq!(FieldValue::Float(1234.5678).to_sql_literal(), "1234.5678");
+        assert_eq!(FieldValue::Float(-3.0).to_sql_literal(), "-3");
+    }
+
+    #[test]
+    fn sql_literal_nonfinite_is_null() {
+        // DP4: NaN AND +/-Infinity all become SQL NULL — no more
+        // Infinity-in-DB vs NaN->NULL asymmetry.
+        assert_eq!(FieldValue::Float(f64::NAN).to_sql_literal(), "NULL");
+        assert_eq!(FieldValue::Float(f64::INFINITY).to_sql_literal(), "NULL");
+        assert_eq!(FieldValue::Float(f64::NEG_INFINITY).to_sql_literal(), "NULL");
+        assert_eq!(FieldValue::Float32(f32::NAN).to_sql_literal(), "NULL");
+        assert_eq!(FieldValue::Float32(f32::INFINITY).to_sql_literal(), "NULL");
+        assert_eq!(FieldValue::Float32(f32::NEG_INFINITY).to_sql_literal(), "NULL");
+    }
+
+    #[test]
+    fn sql_literal_int_bool_text() {
+        assert_eq!(FieldValue::Int(-42).to_sql_literal(), "-42");
+        assert_eq!(FieldValue::Bool(true).to_sql_literal(), "TRUE");
+        assert_eq!(FieldValue::Bool(false).to_sql_literal(), "FALSE");
+        assert_eq!(FieldValue::Text("a'b\0".to_string()).to_sql_literal(), "'a''b'");
+    }
+
+    #[test]
+    fn field_value_as_f64() {
+        assert_eq!(FieldValue::Float32(1.5).as_f64(), Some(1.5));
+        assert_eq!(FieldValue::Float(2.5).as_f64(), Some(2.5));
+        assert_eq!(FieldValue::Int(3).as_f64(), Some(3.0));
+        assert_eq!(FieldValue::Bool(true).as_f64(), Some(1.0));
+        assert_eq!(FieldValue::Text("x".into()).as_f64(), None);
+    }
+
+    // --- parse_modbus_address: register class parsing ---
+
+    #[test]
+    fn modbus_addr_holding_5digit() {
+        assert_eq!(parse_modbus_address("40001"), Some((RegisterType::HoldingRegister, 0)));
+        assert_eq!(parse_modbus_address("49999"), Some((RegisterType::HoldingRegister, 9998)));
+    }
+
+    #[test]
+    fn modbus_addr_input_5digit() {
+        assert_eq!(parse_modbus_address("30001"), Some((RegisterType::InputRegister, 0)));
+        assert_eq!(parse_modbus_address("30100"), Some((RegisterType::InputRegister, 99)));
+    }
+
+    #[test]
+    fn modbus_addr_discrete_5digit() {
+        assert_eq!(parse_modbus_address("10001"), Some((RegisterType::DiscreteInput, 0)));
+        assert_eq!(parse_modbus_address("19999"), Some((RegisterType::DiscreteInput, 9998)));
+    }
+
+    #[test]
+    fn modbus_addr_coil_5digit_leading_zero() {
+        assert_eq!(parse_modbus_address("00001"), Some((RegisterType::Coil, 0)));
+        assert_eq!(parse_modbus_address("00010"), Some((RegisterType::Coil, 9)));
+    }
+
+    #[test]
+    fn modbus_addr_extended_6digit() {
+        assert_eq!(parse_modbus_address("400001"), Some((RegisterType::HoldingRegister, 0)));
+        assert_eq!(parse_modbus_address("465535"), Some((RegisterType::HoldingRegister, 65534)));
+        assert_eq!(parse_modbus_address("300001"), Some((RegisterType::InputRegister, 0)));
+        assert_eq!(parse_modbus_address("100001"), Some((RegisterType::DiscreteInput, 0)));
+        assert_eq!(parse_modbus_address("000001"), Some((RegisterType::Coil, 0)));
+    }
+
+    #[test]
+    fn modbus_addr_raw_numeric_is_holding() {
+        assert_eq!(parse_modbus_address("0"), Some((RegisterType::HoldingRegister, 0)));
+        assert_eq!(parse_modbus_address("100"), Some((RegisterType::HoldingRegister, 100)));
+        assert_eq!(parse_modbus_address("65535"), Some((RegisterType::HoldingRegister, 65535)));
+    }
+
+    #[test]
+    fn modbus_addr_invalid() {
+        assert_eq!(parse_modbus_address(""), None);
+        assert_eq!(parse_modbus_address("  "), None);
+        assert_eq!(parse_modbus_address("abc"), None);
+        assert_eq!(parse_modbus_address("-1"), None);
+        assert_eq!(parse_modbus_address("99999"), None); // 5-digit, no class
+        assert_eq!(parse_modbus_address("700000"), None);
+    }
+
+    #[test]
+    fn modbus_addr_whitespace_trimmed() {
+        assert_eq!(parse_modbus_address(" 40001 "), Some((RegisterType::HoldingRegister, 0)));
+    }
+
+    // --- derived-field evaluation: non-finite -> NULL-marker, chains ---
+
+    fn derived(key: &str, formula: &str, order: i32) -> DerivedField {
+        DerivedField {
+            field_key: key.to_string(),
+            formula_str: formula.to_string(),
+            eval_order: order,
+        }
+    }
+
+    fn is_null_marker(v: Option<&FieldValue>) -> bool {
+        matches!(v, Some(FieldValue::Float(f)) if f.is_nan())
+    }
+
+    #[test]
+    fn derived_eval_happy_path() {
+        let mut values: FieldMap = HashMap::new();
+        values.insert("a".into(), FieldValue::Float(3.0));
+        values.insert("b".into(), FieldValue::Float(4.0));
+        let dfs = vec![derived("c", "sqrt(a^2 + b^2)", 0)];
+        eval_derived_fields("tjob", "ttab", &dfs, &mut values);
+        match values.get("c") {
+            Some(FieldValue::Float(v)) => assert!((v - 5.0).abs() < 1e-12),
+            other => panic!("expected Float(5.0), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn derived_eval_error_becomes_null_marker() {
+        let mut values: FieldMap = HashMap::new();
+        values.insert("a".into(), FieldValue::Float(1.0));
+        let dfs = vec![derived("bad", "a + missing_var", 0)];
+        eval_derived_fields("tjob", "ttab_err", &dfs, &mut values);
+        assert!(is_null_marker(values.get("bad")));
+        assert_eq!(values.get("bad").unwrap().to_sql_literal(), "NULL");
+    }
+
+    #[test]
+    fn derived_eval_infinity_becomes_null_marker() {
+        // DP4: 1/0 used to be written as 'Infinity' into Postgres
+        let mut values: FieldMap = HashMap::new();
+        values.insert("a".into(), FieldValue::Float(1.0));
+        let dfs = vec![derived("inf_field", "a / 0", 0)];
+        eval_derived_fields("tjob", "ttab_inf", &dfs, &mut values);
+        assert!(is_null_marker(values.get("inf_field")));
+        assert_eq!(values.get("inf_field").unwrap().to_sql_literal(), "NULL");
+    }
+
+    #[test]
+    fn derived_eval_nan_becomes_null_marker() {
+        let mut values: FieldMap = HashMap::new();
+        values.insert("a".into(), FieldValue::Float(0.0));
+        let dfs = vec![derived("nan_field", "a / 0", 0)]; // 0/0 = NaN
+        eval_derived_fields("tjob", "ttab_nan", &dfs, &mut values);
+        assert!(is_null_marker(values.get("nan_field")));
+    }
+
+    #[test]
+    fn derived_eval_chain_in_order() {
+        let mut values: FieldMap = HashMap::new();
+        values.insert("x".into(), FieldValue::Float(2.0));
+        let dfs = vec![derived("y", "x * 10", 0), derived("z", "y + 1", 1)];
+        eval_derived_fields("tjob", "ttab_chain", &dfs, &mut values);
+        match values.get("z") {
+            Some(FieldValue::Float(v)) => assert!((v - 21.0).abs() < 1e-12),
+            other => panic!("expected Float(21.0), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn derived_eval_nonfinite_not_fed_downstream() {
+        // Consistent rule: a non-finite intermediate is NOT placed in the eval
+        // context, so a downstream formula referencing it also fails to NULL
+        // (instead of meval min/max absorbing the NaN into a real number).
+        let mut values: FieldMap = HashMap::new();
+        values.insert("a".into(), FieldValue::Float(0.0));
+        let dfs = vec![
+            derived("bad", "a / 0", 0),            // NaN
+            derived("capped", "min(bad, 5)", 1),   // must NOT become 5
+        ];
+        eval_derived_fields("tjob", "ttab_cascade", &dfs, &mut values);
+        assert!(is_null_marker(values.get("bad")));
+        assert!(is_null_marker(values.get("capped")));
+    }
+
+    #[test]
+    fn derived_sort_deterministic_eval_order_then_field_key() {
+        // DP2 leftover: load_mapping_rows has ORDER BY field_key, and ties on
+        // eval_order (duplicated orders from older API builds) must fall back
+        // to field_key so evaluation order never depends on DB row order.
+        let mut dfs = vec![
+            derived("zeta", "1", 1),
+            derived("beta", "1", 0),
+            derived("alpha", "1", 1),
+            derived("gamma", "1", 0),
+            derived("omega", "1", -1),
+        ];
+        sort_derived_fields(&mut dfs);
+        let got: Vec<(i32, &str)> = dfs.iter().map(|d| (d.eval_order, d.field_key.as_str())).collect();
+        assert_eq!(
+            got,
+            vec![(-1, "omega"), (0, "beta"), (0, "gamma"), (1, "alpha"), (1, "zeta")]
+        );
+        // Re-sorting an already-sorted vec is a no-op (stable + total order)
+        let before: Vec<String> = dfs.iter().map(|d| d.field_key.clone()).collect();
+        sort_derived_fields(&mut dfs);
+        let after: Vec<String> = dfs.iter().map(|d| d.field_key.clone()).collect();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn derived_eval_f32_origin_inputs_work() {
+        let mut values: FieldMap = HashMap::new();
+        values.insert("v".into(), FieldValue::Float32(229.4));
+        let dfs = vec![derived("v2", "v * 2", 0)];
+        eval_derived_fields("tjob", "ttab_f32", &dfs, &mut values);
+        match values.get("v2") {
+            Some(FieldValue::Float(v)) => assert!((v - 458.8).abs() < 0.01),
+            other => panic!("expected Float(~458.8), got {:?}", other),
+        }
+    }
+
+    // --- modbus encoding info + register decode sanity for f32 path ---
+
+    #[test]
+    fn encoding_info_f32_tags() {
+        assert_eq!(modbus_encoding_info("float32"), (2, "f32"));
+        assert_eq!(modbus_encoding_info("float"), (2, "f32"));
+        assert_eq!(modbus_encoding_info("float64"), (4, "f64"));
+        assert_eq!(modbus_encoding_info("uint16"), (1, "u16"));
+    }
+
+    #[test]
+    fn decode_f32_value_widens_then_f32_roundtrips() {
+        // 229.4f32 = 0x4365 6666 big-endian
+        let bits = 229.4_f32.to_bits();
+        let regs = [(bits >> 16) as u16, (bits & 0xFFFF) as u16];
+        let decoded = decode_registers(&regs, "float32", "ABCD").unwrap();
+        // Widened f64 is NOT exactly 229.4 ...
+        assert!(decoded != 229.4_f64);
+        // ... but the Float32 representation prints cleanly
+        assert_eq!(FieldValue::Float32(decoded as f32).to_sql_literal(), "229.4");
+    }
+
+    // --- rate limiter ---
+
+    #[test]
+    fn rate_limiter_first_logs_then_accumulates() {
+        let key = "test:rate:limiter:unique-key-1";
+        // First occurrence logs immediately
+        assert_eq!(rate_limit_event(key, 1, Duration::from_secs(3600)), Some(1));
+        // Subsequent occurrences within the interval are suppressed but counted
+        assert_eq!(rate_limit_event(key, 1, Duration::from_secs(3600)), None);
+        assert_eq!(rate_limit_event(key, 5, Duration::from_secs(3600)), None);
+        // With a zero interval the accumulated count is released
+        assert_eq!(rate_limit_event(key, 1, Duration::from_millis(0)), Some(7));
+    }
+
+    // --- backoff helper ---
+
+    #[test]
+    fn meta_backoff_caps_at_30s() {
+        assert_eq!(meta_backoff(2000, 1), Duration::from_millis(2000));
+        assert_eq!(meta_backoff(2000, 2), Duration::from_millis(4000));
+        assert_eq!(meta_backoff(2000, 5), Duration::from_millis(30_000));
+        assert_eq!(meta_backoff(2000, 60), Duration::from_millis(30_000)); // no overflow
+        assert_eq!(meta_backoff(0, 1), Duration::from_millis(250)); // floor
+    }
+
+    // --- quote_ident ---
+
+    #[test]
+    fn quote_ident_doubles_embedded_quotes() {
+        assert_eq!(quote_ident("plain"), "\"plain\"");
+        assert_eq!(quote_ident("we\"ird"), "\"we\"\"ird\"");
+    }
+
+    // --- redact_dsn ---
+
+    #[test]
+    fn redact_dsn_masks_passwords_only() {
+        assert_eq!(
+            redact_dsn("postgresql://user:topsecret@dbhost:5432/mydb"),
+            "postgresql://user:***@dbhost:5432/mydb"
+        );
+        // No password -> unchanged (host:port colon must not be masked)
+        assert_eq!(
+            redact_dsn("postgresql://postgres@localhost/meta"),
+            "postgresql://postgres@localhost/meta"
+        );
+        // Keyword form
+        assert_eq!(
+            redact_dsn("host=localhost password=hunter2 dbname=x"),
+            "host=localhost password=*** dbname=x"
+        );
+        assert_eq!(
+            redact_dsn("host=localhost password=endofstring"),
+            "host=localhost password=***"
+        );
+        // Garbage passes through
+        assert_eq!(redact_dsn("not a dsn"), "not a dsn");
+    }
+}
+
+/// Only referenced by the Windows DPAPI path (dpapi_unprotect); cfg-gated so
+/// Linux builds emit no dead-code warning (M-RUST-3).
+#[cfg(target_os = "windows")]
 fn env_truthy(name: &str) -> bool {
     matches!(env::var(name).ok().as_deref(), Some("1") | Some("true") | Some("True"))
 }

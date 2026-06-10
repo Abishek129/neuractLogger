@@ -43,8 +43,24 @@ def _expand_pattern(name_or_pattern: str) -> List[str]:
     return [f"{pre}{i}{post}" for i in range(start, end + 1)]
 
 
+# SEC-2/L6: PostgreSQL identifier length limit (also a sane cap for SQLite).
+MAX_IDENT_LEN = 63
+
+
 def _sql_safe(name: str) -> bool:
-    return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name))
+    return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name)) and len(name) <= MAX_IDENT_LEN
+
+
+def _q(engine, name: str) -> str:
+    """Quote a single SQL identifier with the dialect's preparer (SEC-2/L6)."""
+    return engine.dialect.identifier_preparer.quote(name)
+
+
+def _q_qualified(engine, ident: Dict[str, Any]) -> str:
+    """Quoted (schema-)qualified table reference for DDL built via f-strings."""
+    if ident.get("schema"):
+        return f"{_q(engine, ident['schema'])}.{_q(engine, ident['name'])}"
+    return _q(engine, ident["name"])
 
 
 _engine_cache: Dict[str, Any] = {}
@@ -205,6 +221,8 @@ def bulk_create(payload: Dict[str, Any]) -> Dict[str, Any]:
             safe = re.sub(r"[^A-Za-z0-9_]", "_", n)
             if not re.match(r"^[A-Za-z_]", safe):
                 safe = "t_" + safe
+            if len(safe) > MAX_IDENT_LEN:  # SEC-2/L6: Postgres identifier cap
+                raise HTTPException(status_code=400, detail=f"TABLE_NAME_INVALID:{n}")
             warnings.append({"original": n, "normalized": safe})
             normalized.append(safe)
 
@@ -504,16 +522,17 @@ def dry_run(payload: Dict[str, Any]) -> Dict[str, Any]:
         insp = inspect(engine)
         exists = insp.has_table(ident["name"], schema=ident["schema"]) if hasattr(insp, "has_table") else insp.has_table(ident["name"])  # type: ignore[attr-defined]
         ops: List[str] = []
+        qualified = _q_qualified(engine, ident)  # SEC-2/L6: quoted identifiers
         if not exists:
-            cols = ["timestamp_utc DATETIME NOT NULL"] + [f"{k} {_sa_type_to_sql(v)}" for k, v in field_types.items()]
-            ops.append(f"CREATE TABLE {ident['qualified']} (" + ", ".join(cols) + ")")
+            cols = ["timestamp_utc DATETIME NOT NULL"] + [f"{_q(engine, k)} {_sa_type_to_sql(v)}" for k, v in field_types.items()]
+            ops.append(f"CREATE TABLE {qualified} (" + ", ".join(cols) + ")")
         else:
             cols_existing = {c["name"] for c in insp.get_columns(ident["name"], schema=ident["schema"]) }
             for k, v in field_types.items():
                 if k not in cols_existing:
-                    ops.append(f"ALTER TABLE {ident['qualified']} ADD COLUMN {k} {_sa_type_to_sql(v)}")
+                    ops.append(f"ALTER TABLE {qualified} ADD COLUMN {_q(engine, k)} {_sa_type_to_sql(v)}")
             if "timestamp_utc" not in cols_existing:
-                ops.append(f"ALTER TABLE {ident['qualified']} ADD COLUMN timestamp_utc DATETIME NOT NULL")
+                ops.append(f"ALTER TABLE {qualified} ADD COLUMN timestamp_utc DATETIME NOT NULL")
         results.append({"id": t.get("id"), "name": ident["qualified"], "operations": ops})
     return {"success": True, "items": results}
 
@@ -539,59 +558,192 @@ def migrate(payload: Dict[str, Any]) -> Dict[str, Any]:
         if not t:
             results.append({"id": tid, "error": "TABLE_NOT_FOUND"})
             continue
-        schema = Store.instance().get_schema(t.get("schemaId")) or {"fields": []}
-        field_types = {f["key"]: _to_sa_type(f.get("type", "string")) for f in (schema.get("fields") or [])}
-        engine = _engine_for_target(t.get("dbTargetId"))
-        _ensure_namespace(engine)
-        ident = _physical_ident(engine, t.get("name"))
-        md = MetaData()
-        md.reflect(bind=engine)
-        insp = inspect(engine)
-        has_tbl = insp.has_table(ident["name"], schema=ident["schema"]) if hasattr(insp, "has_table") else insp.has_table(ident["name"])  # type: ignore[attr-defined]
-        if not has_tbl:
-            # create table
-            columns = [Column("timestamp_utc", String, nullable=False)]
-            for k, typ in field_types.items():
-                columns.append(Column(k, typ))
-            # Place in neuract schema when supported
-            if ident["schema"]:
-                new_table = Table(ident["name"], md, *columns, schema=ident["schema"])  # type: ignore[arg-type]
-            else:
-                new_table = Table(ident["name"], md, *columns)
-            md.create_all(bind=engine, tables=[new_table])
-            # ensure index on timestamp_utc
-            with engine.begin() as conn:
-                try:
-                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS idx_{ident['name']}_ts ON {ident['qualified']}(timestamp_utc)"))
-                except Exception:
-                    # Fallback for engines without IF NOT EXISTS
-                    try:
-                        conn.execute(text(f"CREATE INDEX idx_{ident['name']}_ts ON {ident['qualified']}(timestamp_utc)"))
-                    except Exception:
-                        pass
-            # Maintain local catalog entry for status/mapping tracking
-            Store.instance().set_table_status(tid, "migrated", migrated_at_iso=_now_ist_iso())
-            results.append({"id": tid, "name": ident["qualified"], "status": "created"})
-        else:
-            # add missing columns
-            existing_cols = {c["name"] for c in insp.get_columns(ident["name"], schema=ident["schema"]) }
-            with engine.begin() as conn:
-                for k, typ in field_types.items():
-                    if k not in existing_cols:
-                        conn.execute(text(f"ALTER TABLE {ident['qualified']} ADD COLUMN {k} {_sa_type_to_sql(typ)}"))
-                if "timestamp_utc" not in existing_cols:
-                    conn.execute(text(f"ALTER TABLE {ident['qualified']} ADD COLUMN timestamp_utc DATETIME NOT NULL"))
-                try:
-                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS idx_{ident['name']}_ts ON {ident['qualified']}(timestamp_utc)"))
-                except Exception:
-                    try:
-                        conn.execute(text(f"CREATE INDEX idx_{ident['name']}_ts ON {ident['qualified']}(timestamp_utc)"))
-                    except Exception:
-                        pass
-            # Maintain local catalog entry for status/mapping tracking
-            Store.instance().set_table_status(tid, "migrated", migrated_at_iso=_now_ist_iso())
-            results.append({"id": tid, "name": ident["qualified"], "status": "updated"})
+        # H-DBC-2: fault-isolate each table — target DDL + derived-mapping
+        # population either fully succeed (then status='migrated') or this
+        # item reports an error and the catalog status stays unchanged.
+        try:
+            results.append(_migrate_one(tid, t))
+        except Exception as e:
+            log.warning("migrate: table=%s name=%s failed: %s", tid, t.get("name"), e)
+            results.append({"id": tid, "error": "MIGRATE_FAILED", "detail": str(e)})
+
     return {"success": True, "items": results}
+
+
+def _migrate_one(tid: str, t: Dict[str, Any]) -> Dict[str, Any]:
+    """Migrate a single table. Raises on failure; only flips status='migrated'
+    after DDL AND derived-mapping population succeeded (H-DBC-2)."""
+    schema = Store.instance().get_schema(t.get("schemaId")) or {"fields": []}
+    schema_fields = schema.get("fields") or []
+    field_types = {f["key"]: _to_sa_type(f.get("type", "string")) for f in schema_fields}
+    # SEC-2/L6: legacy/imported rows may predate route-level validation —
+    # never let an unsafe identifier reach DDL.
+    table_name = t.get("name") or ""
+    if not _sql_safe(table_name):
+        raise ValueError(f"TABLE_NAME_INVALID:{table_name}")
+    bad_keys = [k for k in field_types if not _sql_safe(k)]
+    if bad_keys:
+        raise ValueError(f"FIELD_KEY_INVALID:{','.join(sorted(bad_keys))}")
+    # DP2 self-heal: recompute eval_order from the formulas BEFORE any DDL so a
+    # corrupt/invalid stored order (or formula) fails the item up front.
+    derived_fields = [
+        f for f in _recompute_derived_eval_orders(schema_fields) if f.get("formula")
+    ]
+    engine = _engine_for_target(t.get("dbTargetId"))
+    _ensure_namespace(engine)
+    ident = _physical_ident(engine, table_name)
+    md = MetaData()
+    md.reflect(bind=engine)
+    insp = inspect(engine)
+    has_tbl = insp.has_table(ident["name"], schema=ident["schema"]) if hasattr(insp, "has_table") else insp.has_table(ident["name"])  # type: ignore[attr-defined]
+    qualified = _q_qualified(engine, ident)
+    warnings: List[str] = []
+    if not has_tbl:
+        # create table
+        columns = [Column("timestamp_utc", String, nullable=False)]
+        for k, typ in field_types.items():
+            columns.append(Column(k, typ))
+        # Place in neuract schema when supported
+        if ident["schema"]:
+            new_table = Table(ident["name"], md, *columns, schema=ident["schema"])  # type: ignore[arg-type]
+        else:
+            new_table = Table(ident["name"], md, *columns)
+        md.create_all(bind=engine, tables=[new_table])
+        _ensure_ts_index(engine, ident, qualified, warnings)
+        status = "created"
+    else:
+        # add missing columns
+        existing_cols = {c["name"] for c in insp.get_columns(ident["name"], schema=ident["schema"]) }
+        with engine.begin() as conn:
+            for k, typ in field_types.items():
+                if k not in existing_cols:
+                    conn.execute(text(f"ALTER TABLE {qualified} ADD COLUMN {_q(engine, k)} {_sa_type_to_sql(typ)}"))
+            if "timestamp_utc" not in existing_cols:
+                conn.execute(text(f"ALTER TABLE {qualified} ADD COLUMN timestamp_utc DATETIME NOT NULL"))
+        # Index creation runs OUTSIDE the ALTER transaction: a failed CREATE
+        # INDEX inside the same txn silently rolled the ALTERs back on PG.
+        _ensure_ts_index(engine, ident, qualified, warnings)
+        status = "updated"
+    # Auto-populate device_mappings for derived (formula) fields BEFORE the
+    # status flip so a failure here leaves the table re-migratable (H-DBC-2).
+    # Always called: also clears stale derived rows after field deletion (DP7).
+    _populate_derived_mappings(engine, ident, derived_fields)
+    # Maintain local catalog entry for status/mapping tracking
+    Store.instance().set_table_status(tid, "migrated", migrated_at_iso=_now_ist_iso())
+    item: Dict[str, Any] = {"id": tid, "name": ident["qualified"], "status": status}
+    if warnings:
+        item["warnings"] = warnings
+    return item
+
+
+def _ensure_ts_index(engine, ident: Dict[str, Any], qualified: str, warnings: List[str]) -> None:
+    """Best-effort timestamp index; failures are surfaced, not swallowed (H-DBC-2)."""
+    idx_name = f"idx_{ident['name']}_ts"
+    with engine.begin() as conn:
+        try:
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS {_q(engine, idx_name)} ON {qualified}(timestamp_utc)"))
+            return
+        except Exception:
+            pass  # engine without IF NOT EXISTS — retried below in a fresh txn
+    with engine.begin() as conn:
+        try:
+            conn.execute(text(f"CREATE INDEX {_q(engine, idx_name)} ON {qualified}(timestamp_utc)"))
+        except Exception as e:
+            log.warning("migrate: index create failed table=%s idx=%s err=%s", ident["qualified"], idx_name, e)
+            warnings.append(f"INDEX_CREATE_FAILED:{idx_name}")
+
+
+def _recompute_derived_eval_orders(fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """DP2 self-heal: recompute the topological eval_order from the formulas —
+    never trust stored eval_order (live DBs contain incoherent orders written
+    by the old single-field persistence). Returns a deep copy; raises
+    ValueError when the stored formulas are invalid."""
+    import copy as _copy
+    from .schemas import _validate_and_order_derived_fields  # local import avoids cycle
+    work = _copy.deepcopy(fields)
+    _validate_and_order_derived_fields(work)
+    return work
+
+
+def sync_derived_mappings_for_schema(schema_id: str) -> List[str]:
+    """DP7: push the current derived-formula rows (formula in ``address``,
+    eval_order in ``scale``) to neuract.device_mappings for every
+    already-migrated table bound to this schema. Used by the schema field
+    add/patch/delete endpoints so edits do not silently wait for the next
+    migrate. NOTE: the Rust engine reloads mappings only on job (re)start.
+    Returns per-table warning strings (best-effort; failures are logged)."""
+    store = Store.instance()
+    schema = store.get_schema(schema_id) or {}
+    fields = schema.get("fields") or []
+    try:
+        derived = [f for f in _recompute_derived_eval_orders(fields) if f.get("formula")]
+    except ValueError as e:
+        log.warning("sync_derived_mappings: schema=%s invalid: %s", schema_id, e)
+        return [f"DERIVED_ORDER_RECOMPUTE_FAILED:{e}"]
+    warnings: List[str] = []
+    for t in store.list_tables(parent_schema_id=schema_id, status="migrated"):
+        try:
+            engine = _engine_for_target(t.get("dbTargetId"))
+            ident = _physical_ident(engine, t.get("name"))
+            _populate_derived_mappings(engine, ident, derived)
+        except Exception as e:
+            log.warning("sync_derived_mappings: table=%s name=%s err=%s", t.get("id"), t.get("name"), e)
+            warnings.append(f"DERIVED_MAPPING_SYNC_FAILED:{t.get('name')}:{e}")
+    return warnings
+
+
+def _populate_derived_mappings(engine, ident: Dict[str, str], derived_fields: List[Dict[str, Any]]) -> None:
+    """Write derived field formulas to neuract.device_mappings so Rust can discover them.
+
+    Derived rows are fully engine-owned: the table's 'derived' set is replaced
+    atomically (delete-then-write), so removed/renamed derived fields never
+    leave stale rows evaluating forever (DP7)."""
+    from .mappings import _select_mapping_table, _mapping_ident, _ensure_mapping_table
+    m_table = _select_mapping_table(engine, create=True)
+    table_name = ident["name"]
+    dialect = ""
+    try:
+        dialect = getattr(engine.dialect, "name", "") or ""
+    except Exception:
+        pass
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"DELETE FROM {m_table} WHERE table_name=:t AND protocol='derived'"),
+            {"t": table_name},
+        )
+        for f in derived_fields:
+            params = {
+                "t": table_name,
+                "k": f["key"],
+                "p": "derived",
+                "a": f["formula"],
+                "dt": "float",
+                "s": float(f.get("eval_order") or 0),  # reuse scale column for eval_order
+                "d": None,
+                "dev": None,
+                "enc": "float64",
+            }
+            if dialect.startswith("postgres"):
+                conn.execute(
+                    text(
+                        f"INSERT INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id,encoding) "
+                        "VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev,:enc) "
+                        "ON CONFLICT (table_name, field_key) DO UPDATE SET "
+                        "protocol=EXCLUDED.protocol, address=EXCLUDED.address, data_type=EXCLUDED.data_type, "
+                        "scale=EXCLUDED.scale, deadband=EXCLUDED.deadband, device_id=EXCLUDED.device_id, "
+                        "encoding=EXCLUDED.encoding"
+                    ),
+                    params,
+                )
+            else:
+                conn.execute(
+                    text(
+                        f"INSERT OR REPLACE INTO {m_table} (table_name,field_key,protocol,address,data_type,scale,deadband,device_id,encoding)"
+                        " VALUES (:t,:k,:p,:a,:dt,:s,:d,:dev,:enc)"
+                    ),
+                    params,
+                )
+
 
 IST = timezone(timedelta(hours=5, minutes=30))
 def _now_ist_iso() -> str:
@@ -617,7 +769,7 @@ def delete_table(
             engine = _engine_for_target(t.get("dbTargetId"))
             ident = _physical_ident(engine, t.get("name"))
             with engine.begin() as conn:
-                conn.execute(text(f"DROP TABLE IF EXISTS {ident['qualified']}"))
+                conn.execute(text(f"DROP TABLE IF EXISTS {_q_qualified(engine, ident)}"))
                 # Clean mapping rows from user DB
                 conn.execute(text(f"DELETE FROM {NEURACT_SCHEMA}.device_mappings WHERE table_name=:tn"), {"tn": t.get("name")})
             physical_dropped = True
@@ -645,7 +797,10 @@ def patch_table(table_id: str, payload: Dict[str, Any] = Body(...)) -> Dict[str,
     if "schemaId" in payload:
         sid = payload["schemaId"]
         if sid and not Store.instance().get_schema(sid):
-            raise HTTPException(status_code=400, detail="SCHEMA_NOT_FOUND")
+            # M-API-1: unknown-resource conditions are 404 everywhere else
+            # (bulk_create PARENT_SCHEMA_NOT_FOUND, DEVICE/TABLE_NOT_FOUND);
+            # this was the lone 400 for an equivalent not-found.
+            raise HTTPException(status_code=404, detail="SCHEMA_NOT_FOUND")
         patch["schemaId"] = sid
         warnings.append("Schema changed; existing mappings may need update")
     if "dbTargetId" in payload:

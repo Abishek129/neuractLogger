@@ -1,0 +1,13 @@
+# AI pipeline extras (COMING-SOON feature, excluded from production).
+#
+# Only needed when running with LOGGER_ENABLE_AI=1. Install on top of the
+# core requirements:  pip install -r requirements.txt -r requirements-ai.txt
+#
+# Pinned to the versions present in the dev environment (2026-06-10).
+openai==2.26.0
+fire==0.7.1
+# MFM Knowledge Base (PDF processing + OCR)
+PyMuPDF==1.26.7
+python-multipart==0.0.22
+# Anomaly detection autoencoder / temporal prediction
+numpy==2.2.6

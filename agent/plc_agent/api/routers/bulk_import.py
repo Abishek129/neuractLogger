@@ -1,11 +1,12 @@
 from typing import Dict, Any, Optional, List
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from ..store import Store
+from ..permissions import require_logger_write
 
 router = APIRouter(prefix="/bulk_import")
 
 
-@router.post("/devices")
+@router.post("/devices", dependencies=[Depends(require_logger_write)])
 def bulk_import_devices(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Bulk import devices from spreadsheet data.
@@ -21,12 +22,21 @@ def bulk_import_devices(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not devices_data or not isinstance(devices_data, list):
         raise HTTPException(status_code=400, detail="DEVICES_ARRAY_REQUIRED")
 
+    # M16: live per-device connection probes are opt-in (each dead host blocks
+    # the sync handler for the full connect timeout). Default: import only.
+    test_connections = bool(payload.get("testConnections", False))
+
     store = Store.instance()
     results = []
     created_gateways = 0
     created_devices = 0
     skipped = 0
     failed = 0
+
+    # M16: O(1) duplicate lookup instead of a full list_devices() scan per row.
+    devices_by_name = {
+        (d.get("name") or "").lower(): d for d in store.list_devices()
+    }
 
     for idx, row in enumerate(devices_data):
         try:
@@ -74,8 +84,7 @@ def bulk_import_devices(payload: Dict[str, Any]) -> Dict[str, Any]:
                 continue
 
             # Check if device already exists
-            existing_devices = store.list_devices()
-            existing = next((d for d in existing_devices if (d.get("name") or "").lower() == name.lower()), None)
+            existing = devices_by_name.get(name.lower())
             if existing:
                 results.append({
                     "row": idx,
@@ -175,21 +184,25 @@ def bulk_import_devices(payload: Dict[str, Any]) -> Dict[str, Any]:
             if protocol == "modbus" and order in ("ABCD", "CDAB", "BADC", "DCBA"):
                 device_payload["params"]["order"] = order
 
-            # Connection test before creating (mirrors POST /devices)
-            extra = {}
-            if device_payload.get("gatewayId"):
-                extra["gatewayId"] = device_payload["gatewayId"]
-            if device_payload.get("port") is not None:
-                extra["port"] = device_payload["port"]
-            if device_payload.get("unitId") is not None:
-                extra["unitId"] = device_payload["unitId"]
+            # Connection test before creating (mirrors POST /devices).
+            # Only when testConnections=true (M16); otherwise leave the
+            # device in its default status with no live probe.
+            conn_ok, latency, conn_err = None, None, None
+            if test_connections:
+                extra = {}
+                if device_payload.get("gatewayId"):
+                    extra["gatewayId"] = device_payload["gatewayId"]
+                if device_payload.get("port") is not None:
+                    extra["port"] = device_payload["port"]
+                if device_payload.get("unitId") is not None:
+                    extra["unitId"] = device_payload["unitId"]
 
-            try:
-                conn_ok, latency, conn_err = store.test_device_params(
-                    protocol, device_payload.get("params") or {}, **extra
-                )
-            except Exception:
-                conn_ok, latency, conn_err = False, None, "CONNECTION_TEST_ERROR"
+                try:
+                    conn_ok, latency, conn_err = store.test_device_params(
+                        protocol, device_payload.get("params") or {}, **extra
+                    )
+                except Exception:
+                    conn_ok, latency, conn_err = False, None, "CONNECTION_TEST_ERROR"
 
             # Create device
             try:
@@ -200,13 +213,14 @@ def bulk_import_devices(payload: Dict[str, Any]) -> Dict[str, Any]:
                         device["id"], status="connected",
                         latency_ms=latency, last_error=None,
                     )
-                else:
+                elif test_connections:
                     store.set_device_status(
                         device["id"], status="degraded",
                         latency_ms=None,
                         last_error=conn_err or "TEST_FAILED",
                     )
                 stored = store.get_device(device["id"]) or device
+                devices_by_name[name.lower()] = stored
                 results.append({
                     "row": idx,
                     "status": "created",

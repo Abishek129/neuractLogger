@@ -1,7 +1,8 @@
 from typing import Dict, Any, List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from ..permissions import require_logger_write
 from ..store import Store
 from .. import appdb
 
@@ -14,7 +15,7 @@ def list_protocol_types() -> Dict[str, Any]:
     return {"items": Store.instance().list_protocol_types()}
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_logger_write)])  # C6/SEC-3 sweep
 def create_protocol_type(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Add a new protocol type.
@@ -32,7 +33,7 @@ def create_protocol_type(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.delete("/{protocol_type}")
+@router.delete("/{protocol_type}", dependencies=[Depends(require_logger_write)])  # C6/SEC-3 sweep
 def delete_protocol_type(protocol_type: str) -> Dict[str, Any]:
     """Delete a protocol type. Fails if devices are using it."""
     # Check usage in devices

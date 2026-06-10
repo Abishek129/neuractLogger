@@ -1295,8 +1295,20 @@ def backfill(job_id: str) -> Dict[str, Any]:
             with engine.begin() as conn:
                 conn.execute(text(sql), params)
             wrote += 1
-        except Exception as e:
-            return {"success": False, "message": str(e), "wrote": wrote}
+        except Exception:
+            # H-API-3: a server-side read/write failure must not masquerade as
+            # HTTP 200 + success:false, and the raw exception text (SQL/table
+            # internals) must not leak to the client. Details go to the log.
+            log.exception("backfill failed job=%s table=%s after %d write(s)", job_id, tbl_id, wrote)
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "success": False,
+                    "error": "BACKFILL_WRITE_FAILED",
+                    "message": f"backfill failed on table {tbl_id} after {wrote} successful write(s); see server log",
+                    "wrote": wrote,
+                },
+            )
     return {"success": True, "wrote": wrote}
 IST = timezone(timedelta(hours=5, minutes=30))
 def _now_ist_iso() -> str:

@@ -1,0 +1,2621 @@
+{
+ "cases": [
+  {
+   "category": "topology_ordering",
+   "name": "diamond_reverse_decl_order",
+   "description": "Classic diamond: d=b+c, b=a*2, c=a+10, a=base+1. Declared in REVERSE topo order (d first, a last) so a naive declaration-order evaluator gets all NaN/wrong.",
+   "fields": [
+    {
+     "key": "d",
+     "formula": "b + c"
+    },
+    {
+     "key": "c",
+     "formula": "a + 10"
+    },
+    {
+     "key": "b",
+     "formula": "a * 2"
+    },
+    {
+     "key": "a",
+     "formula": "base + 1"
+    },
+    {
+     "key": "base",
+     "type": "float64"
+    }
+   ],
+   "device_values": {
+    "base": 4
+   },
+   "expect_kind": "valid",
+   "notes": "Correct eval order is a,b,c,d. Single-pass must equal fixpoint. base=4 -> a=5, b=10, c=15, d=25.",
+   "review_note": "ok"
+  },
+  {
+   "category": "topology_ordering",
+   "name": "wide_fanin_seven_chained",
+   "description": "One field sums 7 derived fields each of which derives from base. Wide fan-in (7 deps) declared before its dependencies. Stresses in_degree=7 resolution.",
+   "fields": [
+    {
+     "key": "total",
+     "formula": "p1 + p2 + p3 + p4 + p5 + p6 + p7"
+    },
+    {
+     "key": "p1",
+     "formula": "g + 1"
+    },
+    {
+     "key": "p2",
+     "formula": "g + 2"
+    },
+    {
+     "key": "p3",
+     "formula": "g + 3"
+    },
+    {
+     "key": "p4",
+     "formula": "g + 4"
+    },
+    {
+     "key": "p5",
+     "formula": "g + 5"
+    },
+    {
+     "key": "p6",
+     "formula": "g + 6"
+    },
+    {
+     "key": "p7",
+     "formula": "g + 7"
+    },
+    {
+     "key": "g",
+     "type": "float64"
+    }
+   ],
+   "device_values": {
+    "g": 10
+   },
+   "expect_kind": "valid",
+   "notes": "total has in_degree 7; g=10 -> each pX=10+X, total=7*10+(1..7)=70+28=98.",
+   "review_note": "ok"
+  },
+  {
+   "category": "topology_ordering",
+   "name": "wide_fanout_one_to_six",
+   "description": "One derived root (root) feeds 6 independent consumers. Wide fan-out: 6 fields share in_degree 1 on root, all become ready simultaneously, lexicographic tie-break.",
+   "fields": [
+    {
+     "key": "c1",
+     "formula": "root - 1"
+    },
+    {
+     "key": "c2",
+     "formula": "root * 2"
+    },
+    {
+     "key": "c3",
+     "formula": "root / 4"
+    },
+    {
+     "key": "c4",
+     "formula": "root + 100"
+    },
+    {
+     "key": "c5",
+     "formula": "root ^ 2"
+    },
+    {
+     "key": "c6",
+     "formula": "sqrt(root)"
+    },
+    {
+     "key": "root",
+     "formula": "src + src"
+    },
+    {
+     "key": "src",
+     "type": "float64"
+    }
+   ],
+   "device_values": {
+    "src": 8
+   },
+   "expect_kind": "valid",
+   "notes": "root=16; c1=15,c2=32,c3=4,c4=116,c5=256,c6=4. ^ is power, sqrt(16)=4. Order-independent among c1..c6.",
+   "review_note": "ok"
+  },
+  {
+   "category": "topology_ordering",
+   "name": "two_independent_components",
+   "description": "Two completely separate DAG components in one schema (x-chain and y-chain share no edges), interleaved in declaration. Both must order correctly independently.",
+   "fields": [
+    {
+     "key": "x2",
+     "formula": "x1 * 3"
+    },
+    {
+     "key": "y2",
+     "formula": "y1 + 5"
+    },
+    {
+     "key": "x1",
+     "formula": "ax + 1"
+    },
+    {
+     "key": "y1",
+     "formula": "ay - 2"
+    },
+    {
+     "key": "ax",
+     "type": "float64"
+    },
+    {
+     "key": "ay",
+     "type": "float64"
+    }
+   ],
+   "device_values": {
+    "ax": 2,
+    "ay": 9
+   },
+   "expect_kind": "valid",
+   "notes": "Two disjoint components. ax=2->x1=3->x2=9; ay=9->y1=7->y2=12. Interleaved declaration order.",
+   "review_note": "ok"
+  },
+  {
+   "category": "topology_ordering",
+   "name": "deep_linear_chain_reversed",
+   "description": "Deep 6-deep linear chain f<-e<-d<-c<-b<-a<-base, declared fully reversed (f first). Naive evaluator would fail every level; only correct topo order works.",
+   "fields": [
+    {
+     "key": "f",
+     "formula": "e + 1"
+    },
+    {
+     "key": "e",
+     "formula": "d + 1"
+    },
+    {
+     "key": "d",
+     "formula": "c + 1"
+    },
+    {
+     "key": "c",
+     "formula": "b + 1"
+    },
+    {
+     "key": "b",
+     "formula": "a + 1"
+    },
+    {
+     "key": "a",
+     "formula": "base + 1"
+    },
+    {
+     "key": "base",
+     "type": "float64"
+    }
+   ],
+   "device_values": {
+    "base": 0
+   },
+   "expect_kind": "valid",
+   "notes": "base=0 -> a=1,b=2,c=3,d=4,e=5,f=6. Strict linear chain, order must be a..f.",
+   "review_note": "ok"
+  },
+  {
+   "category": "topology_ordering",
+   "name": "mixed_regular_and_chain",
+   "description": "Some derived fields depend only on regular fields (no edges, in_degree 0) mixed with a chain that depends on them. r_only is ready immediately; chained depends on it.",
+   "fields": [
+    {
+     "key": "chained",
+     "formula": "r_only * mid"
+    },
+    {
+     "key": "mid",
+     "formula": "r_only + reg2"
+    },
+    {
+     "key": "r_only",
+     "formula": "reg1 * 2"
+    },
+    {
+     "key": "reg1",
+     "type": "float64"
+    },
+    {
+     "key": "reg2",
+     "type": "float64"
+    }
+   ],
+   "device_values": {
+    "reg1": 3,
+    "reg2": 4
+   },
+   "expect_kind": "valid",
+   "notes": "r_only depends only on regular reg1 -> in_degree 0. reg1=3->r_only=6; reg2=4->mid=10; chained=6*10=60.",
+   "review_note": "ok"
+  },
+  {
+   "category": "topology_ordering",
+   "name": "diamond_with_extra_tail",
+   "description": "Diamond (top->a,b; a,b->mid) PLUS a tail field that fans in mid AND one diamond arm. Lexicographic tie-break between two ready arms must hold.",
+   "fields": [
+    {
+     "key": "tail",
+     "formula": "mid + a + b"
+    },
+    {
+     "key": "mid",
+     "formula": "a * b"
+    },
+    {
+     "key": "a",
+     "formula": "top + 1"
+    },
+    {
+     "key": "b",
+     "formula": "top - 1"
+    },
+    {
+     "key": "top",
+     "formula": "seed * 2"
+    },
+    {
+     "key": "seed",
+     "type": "float64"
+    }
+   ],
+   "device_values": {
+    "seed": 5
+   },
+   "expect_kind": "valid",
+   "notes": "seed=5->top=10; a=11,b=9; mid=99; tail=99+11+9=119. a and b ready together, tie broken lexicographically.",
+   "review_note": "ok"
+  },
+  {
+   "category": "topology_ordering",
+   "name": "cross_component_shared_leaf",
+   "description": "Two derived consumers (sumAB, sumBC) overlap on a shared middle field b, forming a non-tree DAG. b has fan-out 2; a,c each used once. Non-obvious order.",
+   "fields": [
+    {
+     "key": "sumBC",
+     "formula": "b + c"
+    },
+    {
+     "key": "sumAB",
+     "formula": "a + b"
+    },
+    {
+     "key": "c",
+     "formula": "k * 3"
+    },
+    {
+     "key": "b",
+     "formula": "k * 2"
+    },
+    {
+     "key": "a",
+     "formula": "k + 1"
+    },
+    {
+     "key": "k",
+     "type": "float64"
+    }
+   ],
+   "device_values": {
+    "k": 6
+   },
+   "expect_kind": "valid",
+   "notes": "k=6 -> a=7,b=12,c=18; sumAB=19, sumBC=30. b shared by both sums.",
+   "review_note": "ok"
+  },
+  {
+   "category": "topology_ordering",
+   "name": "interleaved_three_diamonds",
+   "description": "Three diamonds sharing one common base, all fields declared in scrambled (non-topological) order. Stresses determinism of Kahn across many simultaneously-ready nodes.",
+   "fields": [
+    {
+     "key": "d3",
+     "formula": "l3 + r3"
+    },
+    {
+     "key": "d1",
+     "formula": "l1 + r1"
+    },
+    {
+     "key": "r2",
+     "formula": "core - 2"
+    },
+    {
+     "key": "l1",
+     "formula": "core + 1"
+    },
+    {
+     "key": "d2",
+     "formula": "l2 * r2"
+    },
+    {
+     "key": "r1",
+     "formula": "core - 1"
+    },
+    {
+     "key": "l3",
+     "formula": "core + 3"
+    },
+    {
+     "key": "l2",
+     "formula": "core + 2"
+    },
+    {
+     "key": "r3",
+     "formula": "core - 3"
+    },
+    {
+     "key": "core",
+     "formula": "base * 10"
+    },
+    {
+     "key": "base",
+     "type": "float64"
+    }
+   ],
+   "device_values": {
+    "base": 1
+   },
+   "expect_kind": "valid",
+   "notes": "base=1->core=10. l1=11,r1=9,d1=20; l2=12,r2=8,d2=96; l3=13,r3=7,d3=20. Many ready at once, lexicographic order.",
+   "review_note": "ok"
+  },
+  {
+   "category": "topology_ordering",
+   "name": "fanin_after_fanout",
+   "description": "root fans out to 3 mids, then a single sink fans those 3 mids back in. Combined fan-out then fan-in diamond, declared sink-first.",
+   "fields": [
+    {
+     "key": "sink",
+     "formula": "m1 + m2 + m3"
+    },
+    {
+     "key": "m1",
+     "formula": "root + 1"
+    },
+    {
+     "key": "m2",
+     "formula": "root + 2"
+    },
+    {
+     "key": "m3",
+     "formula": "root + 3"
+    },
+    {
+     "key": "root",
+     "formula": "in0 * in0"
+    },
+    {
+     "key": "in0",
+     "type": "float64"
+    }
+   ],
+   "device_values": {
+    "in0": 3
+   },
+   "expect_kind": "valid",
+   "notes": "in0=3->root=9; m1=10,m2=11,m3=12; sink=33. Sink in_degree 3.",
+   "review_note": "ok"
+  },
+  {
+   "category": "topology_ordering",
+   "name": "chain_referencing_earlier_derived_skip",
+   "description": "Field z references both a deep ancestor (a) AND a near parent (y), skipping levels. Diamond-ish skip edge. a must order before y and z; y before z.",
+   "fields": [
+    {
+     "key": "z",
+     "formula": "a + y"
+    },
+    {
+     "key": "y",
+     "formula": "x + a"
+    },
+    {
+     "key": "x",
+     "formula": "a * 2"
+    },
+    {
+     "key": "a",
+     "formula": "p + 1"
+    },
+    {
+     "key": "p",
+     "type": "float64"
+    }
+   ],
+   "device_values": {
+    "p": 4
+   },
+   "expect_kind": "valid",
+   "notes": "p=4->a=5; x=10; y=x+a=15; z=a+y=20. z and y both skip-reference a.",
+   "review_note": "ok"
+  },
+  {
+   "category": "topology_ordering",
+   "name": "lex_order_nonmonotonic_keys",
+   "description": "Topological order differs from lexicographic key order: dependency forces 'zfirst' to evaluate before 'aafter'. Catches evaluators that sort keys alphabetically instead of topologically.",
+   "fields": [
+    {
+     "key": "aafter",
+     "formula": "zfirst * 2"
+    },
+    {
+     "key": "zfirst",
+     "formula": "seed + 1"
+    },
+    {
+     "key": "seed",
+     "type": "float64"
+    }
+   ],
+   "device_values": {
+    "seed": 10
+   },
+   "expect_kind": "valid",
+   "notes": "Topo order zfirst(=11) then aafter(=22). Alphabetical 'aafter' first would NaN. seed=10.",
+   "review_note": "ok"
+  },
+  {
+   "category": "cycle_detection",
+   "name": "self_loop_only_valid_nan",
+   "description": "Pure self-reference a=a+1. Per line 53 the self-edge is stripped, so validator treats it as VALID (in_degree 0). At runtime a is not a context var when evaluated -> meval Errs -> NaN -> NULL. This deliberately contradicts the prompt's naive claim that self-ref is a cycle.",
+   "fields": [
+    {
+     "key": "a",
+     "formula": "a + 1"
+    }
+   ],
+   "expect_kind": "error",
+   "notes": "Validator-VALID (self-edge subtracted at line 53, in_degree 0, eval_order assigned). At runtime evaluates to NaN -> NULL because 'a' is a derived field never inserted as a context var before its own eval. No device_values needed (no regular fields). || UPDATED for DP1 fix: the validator now rejects any key referenced in its own formula with FORMULA_SELF_REFERENCE (a 1-node cycle). The old behavior (accepted, then permanent NULL at runtime) was the DP1 bug.",
+   "review_note": "updated 2026-06-10: DP1 fixed \u2014 self-reference now rejected at validation.",
+   "error_prefix": "FORMULA_SELF_REFERENCE"
+  },
+  {
+   "category": "cycle_detection",
+   "name": "two_node_mutual_cycle",
+   "description": "Classic 2-node cycle a=b+1, b=a+1. Each depends on the other derived field, both in_degree 1, neither ever reaches queue -> order incomplete -> CIRCULAR with both keys sorted.",
+   "fields": [
+    {
+     "key": "a",
+     "formula": "b + 1"
+    },
+    {
+     "key": "b",
+     "formula": "a + 1"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_CIRCULAR_DEPENDENCY",
+   "notes": "unresolved = {a,b}, sorted -> error string 'FORMULA_CIRCULAR_DEPENDENCY:a,b'. No unknown vars (a and b are both field keys).",
+   "review_note": "ok"
+  },
+  {
+   "category": "cycle_detection",
+   "name": "four_node_long_cycle",
+   "description": "Long cycle a->b->c->d->a. a=b, b=c, c=d, d=a. Every node in_degree 1, queue starts empty, nothing resolves -> all four unresolved -> CIRCULAR.",
+   "fields": [
+    {
+     "key": "a",
+     "formula": "b * 2"
+    },
+    {
+     "key": "b",
+     "formula": "c * 2"
+    },
+    {
+     "key": "c",
+     "formula": "d * 2"
+    },
+    {
+     "key": "d",
+     "formula": "a * 2"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_CIRCULAR_DEPENDENCY",
+   "notes": "unresolved sorted -> 'a,b,c,d'. Pure cycle with no entry point; Kahn queue is empty from the start so order stays size 0.",
+   "review_note": "ok"
+  },
+  {
+   "category": "cycle_detection",
+   "name": "cycle_embedded_among_valid_dag",
+   "description": "A 2-node cycle (x=y+1,y=x+1) buried among many valid derived fields that form a clean DAG plus regular fields. A buggy detector that resolves the easy valid ones might miss the embedded cycle. Validator must still report ONLY the cyclic keys.",
+   "fields": [
+    {
+     "key": "raw_a",
+     "type": "float64"
+    },
+    {
+     "key": "raw_b",
+     "type": "float64"
+    },
+    {
+     "key": "p",
+     "formula": "raw_a + raw_b"
+    },
+    {
+     "key": "q",
+     "formula": "p * 2"
+    },
+    {
+     "key": "r",
+     "formula": "q + p + raw_a"
+    },
+    {
+     "key": "x",
+     "formula": "y + 1"
+    },
+    {
+     "key": "y",
+     "formula": "x + 1"
+    },
+    {
+     "key": "s",
+     "formula": "r - 1"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_CIRCULAR_DEPENDENCY",
+   "notes": "Valid fields p,q,r,s resolve fine (len(order)=4); only x,y are unresolved (len(deps)=6 != 4). unresolved sorted -> 'x,y'. raw_a/raw_b are regular and add no edges. No UNKNOWN_VARS (all referenced ids are field keys). Tests that valid DAG nodes do not mask the embedded cycle.",
+   "review_note": "ok"
+  },
+  {
+   "category": "cycle_detection",
+   "name": "near_miss_diamond_dag_valid",
+   "description": "Looks tangled by name (multiple fields cross-referencing) but is actually a valid diamond DAG: d depends on b and c, both depend on a. No cycle. Must be VALID. Lulls a name-based heuristic into thinking it is cyclic.",
+   "fields": [
+    {
+     "key": "base",
+     "type": "float64"
+    },
+    {
+     "key": "a",
+     "formula": "base + 1"
+    },
+    {
+     "key": "b",
+     "formula": "a * 2"
+    },
+    {
+     "key": "c",
+     "formula": "a * 3"
+    },
+    {
+     "key": "d",
+     "formula": "b + c"
+    }
+   ],
+   "device_values": {
+    "base": 10
+   },
+   "expect_kind": "valid",
+   "notes": "Diamond DAG a->{b,c}->d. eval_order: a=0, then b,c (tie, lexicographic b<c), then d last. base=10: a=11, b=22, c=33, d=55. Numeric oracle should agree both ways.",
+   "review_note": "ok"
+  },
+  {
+   "category": "cycle_detection",
+   "name": "self_and_others_in_cycle",
+   "description": "Field references ITSELF and another field, where the other completes a cycle: a=a+b, b=a+1. The self-term a in a's formula is stripped at line 53, but the cross edge a<->b (a needs b, b needs a) still forms a 2-node cycle.",
+   "fields": [
+    {
+     "key": "a",
+     "formula": "a + b"
+    },
+    {
+     "key": "b",
+     "formula": "a + 1"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_SELF_REFERENCE",
+   "notes": "deps[a] = {a,b} - {a} = {b}; deps[b] = {a}. Mutual cycle a<->b. unresolved sorted -> 'a,b'. Confirms self-term removal does NOT hide a genuine cross-cycle. || UPDATED for DP1 fix: the literal self-term in 'a = a + b' now trips FORMULA_SELF_REFERENCE:a before Kahn cycle detection runs (still a rejection, earlier and more precise).",
+   "review_note": "updated 2026-06-10: DP1 self-ref check fires first; cross-cycle would still be caught by Kahn."
+  },
+  {
+   "category": "cycle_detection",
+   "name": "self_loop_plus_regular_valid",
+   "description": "Self-reference that also reads a regular field: a = a + r. Self-edge stripped, regular field adds no edge -> in_degree 0 -> VALID. Runtime still NaN because a is unavailable in context at its own eval.",
+   "fields": [
+    {
+     "key": "r",
+     "type": "float64"
+    },
+    {
+     "key": "a",
+     "formula": "a + r"
+    }
+   ],
+   "expect_kind": "error",
+   "notes": "Validator-VALID: deps[a] = {a,r} - regular{r} - {a} = {} -> in_degree 0 -> eval_order 0. Runtime: 'a' missing in ctx -> meval Err -> NaN -> NULL. Both oracles converge to NaN/NULL. result is NULL regardless of r. || UPDATED for DP1 fix: the validator now rejects any key referenced in its own formula with FORMULA_SELF_REFERENCE (a 1-node cycle). The old behavior (accepted, then permanent NULL at runtime) was the DP1 bug.",
+   "review_note": "updated 2026-06-10: DP1 fixed \u2014 self-reference now rejected at validation.",
+   "error_prefix": "FORMULA_SELF_REFERENCE"
+  },
+  {
+   "category": "cycle_detection",
+   "name": "two_disjoint_cycles",
+   "description": "Two independent cycles in one schema: a<->b and c<->d, no shared nodes. All four unresolved -> CIRCULAR lists all four sorted.",
+   "fields": [
+    {
+     "key": "a",
+     "formula": "b + 1"
+    },
+    {
+     "key": "b",
+     "formula": "a + 1"
+    },
+    {
+     "key": "c",
+     "formula": "d + 1"
+    },
+    {
+     "key": "d",
+     "formula": "c + 1"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_CIRCULAR_DEPENDENCY",
+   "notes": "deps a={b},b={a},c={d},d={c}. in_degree all 1 -> queue empty -> order empty. unresolved={a,b,c,d} sorted -> 'a,b,c,d'.",
+   "review_note": "ok \u2014 no node has in_degree 0; queue starts empty; all four unresolved."
+  },
+  {
+   "category": "cycle_detection",
+   "name": "tail_into_cycle_valid_prefix",
+   "description": "Valid tail t=m+1 (m regular) resolves; then a=b+t, b=a+1 form a cycle. Only a,b unresolved; t is fine.",
+   "fields": [
+    {
+     "key": "m",
+     "type": "float64"
+    },
+    {
+     "key": "t",
+     "formula": "m + 1"
+    },
+    {
+     "key": "a",
+     "formula": "b + t"
+    },
+    {
+     "key": "b",
+     "formula": "a + 1"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_CIRCULAR_DEPENDENCY",
+   "notes": "deps t={} (m regular), a={b,t}, b={a}. in_degree: t=0, a=2, b=1. t resolves -> a drops to 1, still needs b; b still needs a. unresolved={a,b} sorted -> 'a,b'. t NOT in unresolved.",
+   "review_note": "ok \u2014 verified t drains (in_degree 0), a/b remain in the b<->a cycle. unresolved excludes t."
+  },
+  {
+   "category": "cycle_detection",
+   "name": "three_node_cycle_with_chord",
+   "description": "3-node SCC a->c, b->{a,c}, c->b with an extra chord (b also depends on a). All three unresolved.",
+   "fields": [
+    {
+     "key": "a",
+     "formula": "c + 1"
+    },
+    {
+     "key": "b",
+     "formula": "a + c"
+    },
+    {
+     "key": "c",
+     "formula": "b * 2"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_CIRCULAR_DEPENDENCY",
+   "notes": "deps a={c}, b={a,c}, c={b}. in_degrees a=1,b=2,c=1 -> queue empty. unresolved={a,b,c} sorted -> 'a,b,c'.",
+   "review_note": "ok \u2014 re-derived in_degrees (a=1,b=2,c=1); no zero-degree node; all unresolved."
+  },
+  {
+   "category": "cycle_detection",
+   "name": "near_miss_reverse_name_order_valid",
+   "description": "Valid DAG where dependency direction runs opposite to lexicographic key order (z<-y<-x). Clean chain, VALID, despite src declared after its users.",
+   "fields": [
+    {
+     "key": "x",
+     "formula": "src * 2"
+    },
+    {
+     "key": "y",
+     "formula": "x + 1"
+    },
+    {
+     "key": "z",
+     "formula": "y + x"
+    },
+    {
+     "key": "src",
+     "type": "float64"
+    }
+   ],
+   "expect_kind": "valid",
+   "device_values": {
+    "src": 4
+   },
+   "notes": "deps x={} (src regular), y={x}, z={y,x}. Kahn: x=0, y=1, z=2. src=4 -> x=8, y=9, z=17. Partitioning is key-based so declaration order is irrelevant. Valid.",
+   "review_note": "ok \u2014 confirmed acyclic; eval_order x=0,y=1,z=2; src has device value."
+  },
+  {
+   "category": "cycle_detection",
+   "name": "long_cycle_one_valid_sink_outside",
+   "description": "5-node cycle a->b->c->d->e->a plus a non-cyclic sink w=a+1 that depends on a cycle member. w never resolves, so unresolved set includes w too.",
+   "fields": [
+    {
+     "key": "a",
+     "formula": "b + 1"
+    },
+    {
+     "key": "b",
+     "formula": "c + 1"
+    },
+    {
+     "key": "c",
+     "formula": "d + 1"
+    },
+    {
+     "key": "d",
+     "formula": "e + 1"
+    },
+    {
+     "key": "e",
+     "formula": "a + 1"
+    },
+    {
+     "key": "w",
+     "formula": "a + 1"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_CIRCULAR_DEPENDENCY",
+   "notes": "Cycle {a,b,c,d,e} never drains (all in_degree 1, queue empty). w depends on a (derived) -> in_degree[w]=1 never reaches 0. unresolved = deps.keys()-order.keys() = {a,b,c,d,e,w} sorted -> 'a,b,c,d,e,w'. Reported set is the topo leftover, which includes non-cyclic-but-dependent w.",
+   "review_note": "ok \u2014 verified queue starts empty (no in_degree-0 node), so order={} and ALL six (incl. w) are unresolved."
+  },
+  {
+   "category": "unknown_vars_and_functions",
+   "name": "uvf_pure_constant_no_vars",
+   "description": "Formula of only numeric constants/operators (no identifiers). No vars to be unknown -> passes -> finite number.",
+   "fields": [
+    {
+     "key": "c",
+     "type": "float64",
+     "formula": "2 + 3 * 4 - 1"
+    }
+   ],
+   "device_values": {},
+   "expect_kind": "valid",
+   "notes": "c has truthy formula -> derived. regular_keys={}, all_keys={c}. _extract_formula_vars finds no identifiers -> unknown={}, deps[c]={} -> eval_order 0. result 13. No regular fields, device_values={} correct.",
+   "review_note": "ok \u2014 confirmed regex finds zero identifiers; sole derived field; valid eval to 13."
+  },
+  {
+   "category": "unknown_vars_and_functions",
+   "name": "uvf_references_regular_only_valid",
+   "description": "Derived field references only a regular field. Regular fields add no edge and are always known; valid eval.",
+   "fields": [
+    {
+     "key": "raw",
+     "type": "float64"
+    },
+    {
+     "key": "scaled",
+     "type": "float64",
+     "formula": "raw * 10 + 5"
+    }
+   ],
+   "device_values": {
+    "raw": 7
+   },
+   "expect_kind": "valid",
+   "notes": "raw in all_keys -> no UNKNOWN_VARS. deps[scaled]={raw}-regular{raw}-{scaled}={} -> eval_order 0. raw=7 -> result 75.",
+   "review_note": "ok \u2014 verified deps[scaled] empty; raw covered by device_values."
+  },
+  {
+   "category": "unknown_vars_and_functions",
+   "name": "uvf_missing_field_reference",
+   "description": "Formula references an identifier that is neither a field key nor an allowed function. Classic unknown-var error.",
+   "fields": [
+    {
+     "key": "a",
+     "type": "float64"
+    },
+    {
+     "key": "d",
+     "type": "float64",
+     "formula": "a + ghost"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_UNKNOWN_VARS",
+   "notes": "vars={a,ghost}; all_keys={a,d}; ghost not a key/function -> FORMULA_UNKNOWN_VARS:d:ghost.",
+   "review_note": "ok \u2014 ghost confirmed unknown; key in message is the offending derived field 'd'."
+  },
+  {
+   "category": "unknown_vars_and_functions",
+   "name": "uvf_typod_function_name",
+   "description": "Typo'd function name sqrtt(x). Validator treats unknown function-looking tokens as variables -> sqrtt is unknown var -> error.",
+   "fields": [
+    {
+     "key": "x",
+     "type": "float64"
+    },
+    {
+     "key": "r",
+     "type": "float64",
+     "formula": "sqrtt(x)"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_UNKNOWN_FUNCTION",
+   "notes": "UPDATED for DP6(a) fix: the parser distinguishes call targets from variables. 'sqrtt(' is a function call of a non-whitelisted name -> FORMULA_UNKNOWN_FUNCTION:r:sqrtt (previously misreported as an unknown VARIABLE).",
+   "review_note": "updated 2026-06-10: parser-based validation; call target -> UNKNOWN_FUNCTION."
+  },
+  {
+   "category": "unknown_vars_and_functions",
+   "name": "uvf_multiple_unknown_sorted",
+   "description": "Several unknown identifiers; probes that unknown set is sorted and comma-joined.",
+   "fields": [
+    {
+     "key": "ok",
+     "type": "float64"
+    },
+    {
+     "key": "m",
+     "type": "float64",
+     "formula": "zeta + alpha + ok - mu"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_UNKNOWN_VARS",
+   "notes": "vars={zeta,alpha,ok,mu}; all_keys={ok,m}; unknown={alpha,mu,zeta} sorted -> FORMULA_UNKNOWN_VARS:m:alpha,mu,zeta.",
+   "review_note": "ok \u2014 sorted unknown set confirmed (alpha,mu,zeta); ok is a known regular key."
+  },
+  {
+   "category": "unknown_vars_and_functions",
+   "name": "uvf_field_named_like_function_log_hidden",
+   "description": "Regular field literally named 'log' (an allowed function name) and formula 'log + 1'. Function-name exclusion strips 'log' from vars: validator passes but runtime treats log as a function call -> NaN.",
+   "fields": [
+    {
+     "key": "log",
+     "type": "float64"
+    },
+    {
+     "key": "y",
+     "type": "float64",
+     "formula": "log + 1"
+    }
+   ],
+   "device_values": {
+    "log": 100
+   },
+   "expect_kind": "valid",
+   "notes": "UPDATED for DP3/DP9: 'log' is not a meval builtin at all (whitelist fixed), and the parser treats a bare identifier as a VARIABLE regardless of name collisions (meval Var/Func namespaces are separate). 'log + 1' with log=100 -> 101, stored as 101 \u2014 the old 'runtime NULL' expectation reflected a harness model error (DP9).",
+   "review_note": "updated 2026-06-10: field usable; expected value 101, not NULL."
+  },
+  {
+   "category": "unknown_vars_and_functions",
+   "name": "uvf_field_named_min_unreferenceable",
+   "description": "Regular field named 'min' referenced in another formula. 'min' is whitelisted, so the token is dropped -> validator never sees it as a var; the field is effectively un-referenceable.",
+   "fields": [
+    {
+     "key": "min",
+     "type": "float64"
+    },
+    {
+     "key": "z",
+     "type": "float64",
+     "formula": "min * 2"
+    }
+   ],
+   "device_values": {
+    "min": 9
+   },
+   "expect_kind": "valid",
+   "notes": "UPDATED for DP9: a bare 'min' (not followed by '(') is a VARIABLE in meval; with the parser-based extraction the dependency on field 'min' is tracked and the runtime reads the device value: min=9 -> z=18. The 'unreferenceable' claim was REFUTED against real meval 0.2 (DP9).",
+   "review_note": "updated 2026-06-10: field IS referenceable; expected 18, not NULL."
+  },
+  {
+   "category": "unknown_vars_and_functions",
+   "name": "uvf_known_funcs_not_vars",
+   "description": "Formula uses several whitelisted functions on a real var. None of the function names count as unknown vars; valid eval.",
+   "fields": [
+    {
+     "key": "x",
+     "type": "float64"
+    },
+    {
+     "key": "out",
+     "type": "float64",
+     "formula": "sqrt(x) + abs(x) + exp(0)"
+    }
+   ],
+   "device_values": {
+    "x": 16
+   },
+   "expect_kind": "valid",
+   "notes": "tokens sqrt,abs,exp removed as functions; only var {x} which is known. valid. x=16 -> 4 + 16 + 1 = 21.",
+   "review_note": "ok \u2014 all three names are exact whitelist members and excluded; only x remains, known."
+  },
+  {
+   "category": "unknown_vars_and_functions",
+   "name": "uvf_substring_of_function_name",
+   "description": "Identifiers 'sq' and 'sqr' that are substrings/prefixes of 'sqrt' but not the exact token. They are real unknown vars -> error. Probes exact-match (not substring) exclusion.",
+   "fields": [
+    {
+     "key": "x",
+     "type": "float64"
+    },
+    {
+     "key": "w",
+     "type": "float64",
+     "formula": "sqr + sq + x"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_UNKNOWN_VARS",
+   "notes": "regex finds {sqr,sq,x}; exclusion is exact-match so sqr,sq stay; not field keys -> unknown={sq,sqr} sorted -> FORMULA_UNKNOWN_VARS:w:sq,sqr.",
+   "review_note": "ok \u2014 confirmed substring tokens are not excluded; both unknown."
+  },
+  {
+   "category": "unknown_vars_and_functions",
+   "name": "uvf_function_name_with_suffix",
+   "description": "Token 'log10' (looks like a function but only 'log'/'log2' are whitelisted). 'log10' treated as unknown var -> error.",
+   "fields": [
+    {
+     "key": "p",
+     "type": "float64"
+    },
+    {
+     "key": "q",
+     "type": "float64",
+     "formula": "log10(p)"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_UNKNOWN_FUNCTION",
+   "notes": "UPDATED for DP3/DP6(a) fix: 'log10(' is a call of a non-whitelisted function (meval has neither log nor log10) -> FORMULA_UNKNOWN_FUNCTION:q:log10.",
+   "review_note": "updated 2026-06-10: parser-based validation; call target -> UNKNOWN_FUNCTION."
+  },
+  {
+   "category": "unknown_vars_and_functions",
+   "name": "uvf_first_derived_unknown_wins",
+   "description": "Earlier derived field (source order) has an unknown var, later one is valid. Unknown-var check iterates derived in source order -> earlier field's error fires.",
+   "fields": [
+    {
+     "key": "base",
+     "type": "float64"
+    },
+    {
+     "key": "bad",
+     "type": "float64",
+     "formula": "base + nope"
+    },
+    {
+     "key": "good",
+     "type": "float64",
+     "formula": "base * 2"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_UNKNOWN_VARS",
+   "notes": "derived=[(1,bad),(2,good)] in source order; 'bad' hit first -> FORMULA_UNKNOWN_VARS:bad:nope. 'good' valid but never reached.",
+   "review_note": "ok \u2014 verified iteration over `derived` is source order; bad precedes good."
+  },
+  {
+   "category": "unknown_vars_and_functions",
+   "name": "uvf_unknown_in_chained_derived",
+   "description": "Derived field references a valid earlier derived field plus an unknown identifier. Derived keys count as known; stray unknown still errors.",
+   "fields": [
+    {
+     "key": "src",
+     "type": "float64"
+    },
+    {
+     "key": "mid",
+     "type": "float64",
+     "formula": "src + 1"
+    },
+    {
+     "key": "top",
+     "type": "float64",
+     "formula": "mid + phantom"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_UNKNOWN_VARS",
+   "notes": "all_keys={src,mid,top}; mid known (derived). vars for top={mid,phantom}; phantom unknown -> FORMULA_UNKNOWN_VARS:top:phantom. (mid checked first is valid: src known.)",
+   "review_note": "ok \u2014 mid passes (src known); top fails on phantom. all_keys includes derived keys."
+  },
+  {
+   "category": "unknown_vars_and_functions",
+   "name": "uvf_underscore_and_digits_ident",
+   "description": "Formula references a snake_case identifier with digits that is NOT a field key. Confirms regex captures full [A-Za-z_][A-Za-z0-9_]* token and flags it unknown.",
+   "fields": [
+    {
+     "key": "v1",
+     "type": "float64"
+    },
+    {
+     "key": "calc",
+     "type": "float64",
+     "formula": "v1 + temp_2b"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_UNKNOWN_VARS",
+   "notes": "temp_2b is one valid identifier, not a field key, not a function -> FORMULA_UNKNOWN_VARS:calc:temp_2b. v1 is known. Verified against validator.",
+   "review_note": "ok"
+  },
+  {
+   "category": "numeric_ieee_edge",
+   "name": "div_by_zero_positive_inf",
+   "description": "Positive numerator over a device-supplied zero denominator. IEEE f64 gives +inf; to_sql_literal maps it to 'Infinity'.",
+   "fields": [
+    {
+     "key": "num",
+     "type": "float64"
+    },
+    {
+     "key": "den",
+     "type": "float64"
+    },
+    {
+     "key": "ratio",
+     "type": "float64",
+     "formula": "num / den"
+    }
+   ],
+   "device_values": {
+    "num": 5,
+    "den": 0
+   },
+   "expect_kind": "valid",
+   "notes": "5/0 -> +inf -> 'Infinity'. Oracle must use f64 division (numpy/Rust), NOT Python '/' which raises ZeroDivisionError. || UPDATED for new engine semantics: +/-Infinity now maps to SQL NULL (to_sql_literal treats ALL non-finite as NULL) and is not fed into the meval ctx.",
+   "review_note": "ok"
+  },
+  {
+   "category": "numeric_ieee_edge",
+   "name": "div_by_zero_negative_inf",
+   "description": "Negative numerator over zero denominator yields -inf, mapping to '-Infinity'.",
+   "fields": [
+    {
+     "key": "num",
+     "type": "float64"
+    },
+    {
+     "key": "den",
+     "type": "float64"
+    },
+    {
+     "key": "ratio",
+     "type": "float64",
+     "formula": "num / den"
+    }
+   ],
+   "device_values": {
+    "num": -3.5,
+    "den": 0
+   },
+   "expect_kind": "valid",
+   "notes": "-3.5/0 -> -inf -> '-Infinity'. Confirmed via numpy f64. || UPDATED for new engine semantics: +/-Infinity now maps to SQL NULL (to_sql_literal treats ALL non-finite as NULL) and is not fed into the meval ctx.",
+   "review_note": "ok"
+  },
+  {
+   "category": "numeric_ieee_edge",
+   "name": "zero_over_zero_nan_null",
+   "description": "Both numerator and denominator zero -> 0/0 is NaN in IEEE f64 -> NULL column.",
+   "fields": [
+    {
+     "key": "a",
+     "type": "float64"
+    },
+    {
+     "key": "b",
+     "type": "float64"
+    },
+    {
+     "key": "q",
+     "type": "float64",
+     "formula": "a / b"
+    }
+   ],
+   "device_values": {
+    "a": 0,
+    "b": 0
+   },
+   "expect_kind": "valid",
+   "notes": "0/0 -> NaN -> NULL. Both oracles converge on NaN.",
+   "review_note": "ok"
+  },
+  {
+   "category": "numeric_ieee_edge",
+   "name": "sqrt_negative_nan_null",
+   "description": "sqrt of a negative device value -> NaN -> NULL. Uses allowed function sqrt.",
+   "fields": [
+    {
+     "key": "x",
+     "type": "float64"
+    },
+    {
+     "key": "root",
+     "type": "float64",
+     "formula": "sqrt(x)"
+    }
+   ],
+   "device_values": {
+    "x": -16
+   },
+   "expect_kind": "valid",
+   "notes": "sqrt(-16) -> NaN -> NULL. f64::sqrt of negative is NaN (numpy confirms), not an error.",
+   "review_note": "ok"
+  },
+  {
+   "category": "numeric_ieee_edge",
+   "name": "overflow_to_inf",
+   "description": "Multiplying a near-max-double magnitude by 10 overflows to +inf -> 'Infinity'.",
+   "fields": [
+    {
+     "key": "big",
+     "type": "float64"
+    },
+    {
+     "key": "scaled",
+     "type": "float64",
+     "formula": "big * 10"
+    }
+   ],
+   "device_values": {
+    "big": 1e+308
+   },
+   "expect_kind": "valid",
+   "notes": "1e308*10 > f64 max -> +inf -> 'Infinity'. Oracle must use f64 multiply; numpy confirms inf. || UPDATED for new engine semantics: +/-Infinity now maps to SQL NULL (to_sql_literal treats ALL non-finite as NULL) and is not fed into the meval ctx.",
+   "review_note": "ok"
+  },
+  {
+   "category": "numeric_ieee_edge",
+   "name": "negative_overflow_to_neg_inf",
+   "description": "big^2 overflows to +inf, then 0 - inf = -inf via the ^ power op. Confirms ^ is POWER and overflow direction.",
+   "fields": [
+    {
+     "key": "big",
+     "type": "float64"
+    },
+    {
+     "key": "huge",
+     "type": "float64",
+     "formula": "0 - (big ^ 2)"
+    }
+   ],
+   "device_values": {
+    "big": 1e+200
+   },
+   "expect_kind": "valid",
+   "notes": "big^2 = 1e400 -> +inf; 0 - inf = -inf -> '-Infinity'. WARNING for harness: Python's 1e200**2 raises OverflowError; oracle MUST use f64 power (numpy.power) which returns inf. Verified inf/-inf via numpy. || UPDATED for new engine semantics: +/-Infinity now maps to SQL NULL (to_sql_literal treats ALL non-finite as NULL) and is not fed into the meval ctx.",
+   "review_note": "ok; added explicit harness warning that Python ** overflows here while meval/numpy f64 yield inf."
+  },
+  {
+   "category": "numeric_ieee_edge",
+   "name": "pythagorean_power_op",
+   "description": "x^2 + y^2 using ^ as exponentiation (NOT xor). Finite valid result, checks power-op faithfulness.",
+   "fields": [
+    {
+     "key": "x",
+     "type": "float64"
+    },
+    {
+     "key": "y",
+     "type": "float64"
+    },
+    {
+     "key": "hyp_sq",
+     "type": "float64",
+     "formula": "x ^ 2 + y ^ 2"
+    }
+   ],
+   "device_values": {
+    "x": 3,
+    "y": 4
+   },
+   "expect_kind": "valid",
+   "notes": "3^2 + 4^2 = 25 (finite). ^ is POWER in meval; a Python oracle must use ** not ^ (xor). No inf/NaN.",
+   "review_note": "ok"
+  },
+  {
+   "category": "numeric_ieee_edge",
+   "name": "subtractive_cancellation",
+   "description": "Catastrophic cancellation: (a+1) - a where a is huge loses precision; result is 0 not 1.",
+   "fields": [
+    {
+     "key": "a",
+     "type": "float64"
+    },
+    {
+     "key": "diff",
+     "type": "float64",
+     "formula": "(a + 1) - a"
+    }
+   ],
+   "device_values": {
+    "a": 100000000000000000
+   },
+   "expect_kind": "valid",
+   "notes": "1e17+1 not distinct from 1e17 in f64, so (a+1)-a == 0.0, not 1. Confirmed 0.0 in Python f64. Both oracles agree.",
+   "review_note": "ok"
+  },
+  {
+   "category": "numeric_ieee_edge",
+   "name": "chain_inf_propagates_finite",
+   "description": "Intermediate derived field becomes +inf (div by zero); a later derived field references it; inf propagates through arithmetic.",
+   "fields": [
+    {
+     "key": "p",
+     "type": "float64"
+    },
+    {
+     "key": "z",
+     "type": "float64"
+    },
+    {
+     "key": "step1",
+     "type": "float64",
+     "formula": "p / z"
+    },
+    {
+     "key": "step2",
+     "type": "float64",
+     "formula": "step1 + 1"
+    }
+   ],
+   "device_values": {
+    "p": 2,
+    "z": 0
+   },
+   "expect_kind": "valid",
+   "notes": "UPDATED for new engine semantics: step1 = 2/0 -> +inf which is now NON-FINITE -> SQL NULL and NOT fed into ctx; step2 references missing step1 -> Err -> NULL. Infinity no longer propagates into the DB (DP4 fix).",
+   "review_note": "ok"
+  },
+  {
+   "category": "numeric_ieee_edge",
+   "name": "chain_nan_cascade",
+   "description": "Intermediate derived field is NaN (0/0); a downstream field references it -> NaN poisons arithmetic.",
+   "fields": [
+    {
+     "key": "a",
+     "type": "float64"
+    },
+    {
+     "key": "b",
+     "type": "float64"
+    },
+    {
+     "key": "bad",
+     "type": "float64",
+     "formula": "a / b"
+    },
+    {
+     "key": "downstream",
+     "type": "float64",
+     "formula": "bad * 2 + 7"
+    }
+   ],
+   "device_values": {
+    "a": 0,
+    "b": 0
+   },
+   "expect_kind": "valid",
+   "notes": "bad = 0/0 -> NaN. Rust: NaN is a successful eval (Ok), so bad=NaN IS inserted into ctx (main.rs 885-887); downstream = NaN*2+7 = NaN -> NULL. Both fields NULL. eval_order: bad=0, downstream=1 (verified).",
+   "review_note": "ok"
+  },
+  {
+   "category": "numeric_ieee_edge",
+   "name": "inf_minus_inf_nan",
+   "description": "Two +inf intermediates subtracted: inf - inf is NaN in IEEE -> NULL. Indeterminate form through chaining.",
+   "fields": [
+    {
+     "key": "d",
+     "type": "float64"
+    },
+    {
+     "key": "infA",
+     "type": "float64",
+     "formula": "1 / d"
+    },
+    {
+     "key": "infB",
+     "type": "float64",
+     "formula": "2 / d"
+    },
+    {
+     "key": "indet",
+     "type": "float64",
+     "formula": "infA - infB"
+    }
+   ],
+   "device_values": {
+    "d": 0
+   },
+   "expect_kind": "valid",
+   "notes": "UPDATED for new engine semantics: infA=1/0 and infB=2/0 are +inf -> NULL each, not fed to ctx; indet references missing vars -> Err -> NULL. All three stored NULL.",
+   "review_note": "ok"
+  },
+  {
+   "category": "numeric_ieee_edge",
+   "name": "tiny_underflow_to_zero",
+   "description": "Multiplying two tiny magnitudes underflows to exactly 0.0 (finite, not NaN/inf).",
+   "fields": [
+    {
+     "key": "t",
+     "type": "float64"
+    },
+    {
+     "key": "prod",
+     "type": "float64",
+     "formula": "t * t"
+    }
+   ],
+   "device_values": {
+    "t": 1e-200
+   },
+   "expect_kind": "valid",
+   "notes": "1e-200 * 1e-200 = 1e-400 < smallest subnormal -> underflows to +0.0. SQL literal '0'. Confirmed 0.0 via numpy f64.",
+   "review_note": "ok"
+  },
+  {
+   "category": "electrical_realistic",
+   "name": "apparent_power_pf_chain",
+   "description": "3-level derived chain: apparent power S from P,Q; power factor PF from P,S (chains on derived S); pf_pct from PF. Stresses multi-hop chaining through eval_order.",
+   "fields": [
+    {
+     "key": "active_power_total_kw",
+     "type": "float32"
+    },
+    {
+     "key": "reactive_power_total_kvar",
+     "type": "float32"
+    },
+    {
+     "key": "apparent_power_kva",
+     "type": "float64",
+     "formula": "sqrt(active_power_total_kw^2 + reactive_power_total_kvar^2)"
+    },
+    {
+     "key": "power_factor",
+     "type": "float64",
+     "formula": "active_power_total_kw / apparent_power_kva"
+    },
+    {
+     "key": "pf_pct",
+     "type": "float64",
+     "formula": "power_factor * 100"
+    }
+   ],
+   "device_values": {
+    "active_power_total_kw": 80,
+    "reactive_power_total_kvar": 60
+   },
+   "expect_kind": "valid",
+   "notes": "S=100, PF=0.8, pf_pct=80. eval_order apparent_power_kva=0 < power_factor=1 < pf_pct=2 (verified). ^ is POWER.",
+   "review_note": "ok"
+  },
+  {
+   "category": "electrical_realistic",
+   "name": "pf_zero_load_div_zero_nan",
+   "description": "No-load: P=Q=0 so apparent_power_kva=0, then power_factor = 0/0 = NaN -> NULL. Probes 0/0 IEEE path on an idle-meter snapshot.",
+   "fields": [
+    {
+     "key": "active_power_total_kw",
+     "type": "float32"
+    },
+    {
+     "key": "reactive_power_total_kvar",
+     "type": "float32"
+    },
+    {
+     "key": "apparent_power_kva",
+     "type": "float64",
+     "formula": "sqrt(active_power_total_kw^2 + reactive_power_total_kvar^2)"
+    },
+    {
+     "key": "power_factor",
+     "type": "float64",
+     "formula": "active_power_total_kw / apparent_power_kva"
+    }
+   ],
+   "device_values": {
+    "active_power_total_kw": 0,
+    "reactive_power_total_kvar": 0
+   },
+   "expect_kind": "valid",
+   "notes": "apparent_power_kva=0 (valid). power_factor = 0/0 -> NaN -> NULL. eval_order apparent=0 < power_factor=1. Both oracles converge to NaN.",
+   "review_note": "ok"
+  },
+  {
+   "category": "electrical_realistic",
+   "name": "voltage_current_averages",
+   "description": "Flat per-phase averaging: voltage_avg and current_avg each from three regular phase fields. No derived-derived edges; output is order-independent.",
+   "fields": [
+    {
+     "key": "voltage_l1",
+     "type": "float32"
+    },
+    {
+     "key": "voltage_l2",
+     "type": "float32"
+    },
+    {
+     "key": "voltage_l3",
+     "type": "float32"
+    },
+    {
+     "key": "current_l1",
+     "type": "float32"
+    },
+    {
+     "key": "current_l2",
+     "type": "float32"
+    },
+    {
+     "key": "current_l3",
+     "type": "float32"
+    },
+    {
+     "key": "voltage_avg",
+     "type": "float64",
+     "formula": "(voltage_l1 + voltage_l2 + voltage_l3) / 3"
+    },
+    {
+     "key": "current_avg",
+     "type": "float64",
+     "formula": "(current_l1 + current_l2 + current_l3) / 3"
+    }
+   ],
+   "device_values": {
+    "voltage_l1": 230,
+    "voltage_l2": 232,
+    "voltage_l3": 231,
+    "current_l1": 10,
+    "current_l2": 12,
+    "current_l3": 14
+   },
+   "expect_kind": "valid",
+   "notes": "voltage_avg=231, current_avg=12. Both derived have in_degree 0, but eval_order is a global counter so they get DISTINCT values: lex tie-break gives current_avg=0, voltage_avg=1 (verified against validator). Values are order-independent since both depend only on regular fields.",
+   "review_note": "Fixed factually wrong note: original claimed 'both get eval_order 0'. The validator assigns a global incrementing idx, so the two independent in_degree-0 fields get 0 and 1, not both 0; lex tie-break yields current_avg=0, voltage_avg=1."
+  },
+  {
+   "category": "electrical_realistic",
+   "name": "voltage_unbalance_max_min_avg",
+   "description": "Voltage unbalance % using max()/min() over phases and chaining on derived voltage_avg. Probes 2-arg max/min plus a derived dependency.",
+   "fields": [
+    {
+     "key": "voltage_l1",
+     "type": "float32"
+    },
+    {
+     "key": "voltage_l2",
+     "type": "float32"
+    },
+    {
+     "key": "voltage_l3",
+     "type": "float32"
+    },
+    {
+     "key": "voltage_avg",
+     "type": "float64",
+     "formula": "(voltage_l1 + voltage_l2 + voltage_l3) / 3"
+    },
+    {
+     "key": "voltage_unbalance_pct",
+     "type": "float64",
+     "formula": "(max(max(voltage_l1, voltage_l2), voltage_l3) - min(min(voltage_l1, voltage_l2), voltage_l3)) / voltage_avg * 100"
+    }
+   ],
+   "device_values": {
+    "voltage_l1": 228,
+    "voltage_l2": 234,
+    "voltage_l3": 231
+   },
+   "expect_kind": "valid",
+   "notes": "voltage_avg=231, spread=6, unbalance=6/231*100. voltage_unbalance_pct depends on derived voltage_avg -> eval_order voltage_avg=0 < voltage_unbalance_pct=1 (verified).",
+   "review_note": "ok"
+  },
+  {
+   "category": "electrical_realistic",
+   "name": "reverse_declared_order_topo",
+   "description": "Derived fields declared in REVERSE dependency order (consumer before producer) to force topo reorder. apparent listed last but must eval first. Probes eval_order vs source order.",
+   "fields": [
+    {
+     "key": "active_power_total_kw",
+     "type": "float32"
+    },
+    {
+     "key": "reactive_power_total_kvar",
+     "type": "float32"
+    },
+    {
+     "key": "pf_pct",
+     "type": "float64",
+     "formula": "power_factor * 100"
+    },
+    {
+     "key": "power_factor",
+     "type": "float64",
+     "formula": "active_power_total_kw / apparent_power_kva"
+    },
+    {
+     "key": "apparent_power_kva",
+     "type": "float64",
+     "formula": "sqrt(active_power_total_kw^2 + reactive_power_total_kvar^2)"
+    }
+   ],
+   "device_values": {
+    "active_power_total_kw": 120,
+    "reactive_power_total_kvar": 50
+   },
+   "expect_kind": "valid",
+   "notes": "S=130, PF=120/130, pf_pct=PF*100. Source order is consumer-first; Kahn yields eval_order apparent_power_kva=0 < power_factor=1 < pf_pct=2 (verified, matches forward-declared case).",
+   "review_note": "ok"
+  },
+  {
+   "category": "electrical_realistic",
+   "name": "energy_delta_per_phase_power",
+   "description": "Mixed realistic derivations: total energy from three phase counters, per-phase power V*I, and total power summing derived per-phase powers (chain). Stresses fan-in where one derived depends on three other derived fields.",
+   "fields": [
+    {
+     "key": "energy_import_l1_kwh",
+     "type": "float64"
+    },
+    {
+     "key": "energy_import_l2_kwh",
+     "type": "float64"
+    },
+    {
+     "key": "energy_import_l3_kwh",
+     "type": "float64"
+    },
+    {
+     "key": "voltage_l1",
+     "type": "float32"
+    },
+    {
+     "key": "voltage_l2",
+     "type": "float32"
+    },
+    {
+     "key": "voltage_l3",
+     "type": "float32"
+    },
+    {
+     "key": "current_l1",
+     "type": "float32"
+    },
+    {
+     "key": "current_l2",
+     "type": "float32"
+    },
+    {
+     "key": "current_l3",
+     "type": "float32"
+    },
+    {
+     "key": "energy_import_total_kwh",
+     "type": "float64",
+     "formula": "energy_import_l1_kwh + energy_import_l2_kwh + energy_import_l3_kwh"
+    },
+    {
+     "key": "power_l1_w",
+     "type": "float64",
+     "formula": "voltage_l1 * current_l1"
+    },
+    {
+     "key": "power_l2_w",
+     "type": "float64",
+     "formula": "voltage_l2 * current_l2"
+    },
+    {
+     "key": "power_l3_w",
+     "type": "float64",
+     "formula": "voltage_l3 * current_l3"
+    },
+    {
+     "key": "power_total_w",
+     "type": "float64",
+     "formula": "power_l1_w + power_l2_w + power_l3_w"
+    }
+   ],
+   "device_values": {
+    "energy_import_l1_kwh": 1000.5,
+    "energy_import_l2_kwh": 2000.25,
+    "energy_import_l3_kwh": 3000.125,
+    "voltage_l1": 230,
+    "voltage_l2": 231,
+    "voltage_l3": 229,
+    "current_l1": 10,
+    "current_l2": 20,
+    "current_l3": 30
+   },
+   "expect_kind": "valid",
+   "error_prefix": "",
+   "notes": "Verified against validator. Four in_degree-0 derived (energy_import_total_kwh, power_l1_w, power_l2_w, power_l3_w) get eval_order 0..3 by lexicographic tie-break; power_total_w depends on the three powers -> eval_order 4 (NOT 1). power_total_w = 230*10+231*20+229*30 = 2300+4620+6870 = 13790; energy_import_total_kwh = 6000.875.",
+   "review_note": "ok structurally; corrected note: power_total_w eval_order is 4 (lexicographic tie-break orders the four ready fields first), not 1 as originally claimed."
+  },
+  {
+   "category": "electrical_realistic",
+   "name": "circular_pf_apparent_cycle",
+   "description": "Erroneous spec: apparent_power_kva defined in terms of power_factor AND power_factor in terms of apparent_power_kva. True 2-node cycle among derived fields -> FORMULA_CIRCULAR_DEPENDENCY.",
+   "fields": [
+    {
+     "key": "active_power_total_kw",
+     "type": "float32"
+    },
+    {
+     "key": "apparent_power_kva",
+     "type": "float64",
+     "formula": "active_power_total_kw / power_factor"
+    },
+    {
+     "key": "power_factor",
+     "type": "float64",
+     "formula": "active_power_total_kw / apparent_power_kva"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_CIRCULAR_DEPENDENCY",
+   "notes": "Verified: validator raises FORMULA_CIRCULAR_DEPENDENCY:apparent_power_kva,power_factor (unresolved sorted). active_power_total_kw is regular so adds no edge. No device_values needed (never reaches eval).",
+   "review_note": "ok \u2014 confirmed exact message via validator run."
+  },
+  {
+   "category": "electrical_realistic",
+   "name": "typo_unknown_phase_var",
+   "description": "Formula references current_l4 which does not exist (only l1..l3 wired). Probes FORMULA_UNKNOWN_VARS on a realistic phase-count typo.",
+   "fields": [
+    {
+     "key": "current_l1",
+     "type": "float32"
+    },
+    {
+     "key": "current_l2",
+     "type": "float32"
+    },
+    {
+     "key": "current_l3",
+     "type": "float32"
+    },
+    {
+     "key": "current_avg",
+     "type": "float64",
+     "formula": "(current_l1 + current_l2 + current_l3 + current_l4) / 4"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_UNKNOWN_VARS",
+   "notes": "Verified: FORMULA_UNKNOWN_VARS:current_avg:current_l4. Fires before topo sort.",
+   "review_note": "ok \u2014 confirmed exact message via validator run."
+  },
+  {
+   "category": "electrical_realistic",
+   "name": "self_ref_running_energy_accumulator",
+   "description": "TRAP: engineer writes energy_accumulated = energy_accumulated + energy_delta_kwh expecting an accumulator. Validator does NOT flag self-reference (self-edge stripped at line 53) -> VALID, but at runtime energy_accumulated is not yet a ctx var -> eval Err -> NaN -> NULL.",
+   "fields": [
+    {
+     "key": "energy_delta_kwh",
+     "type": "float64"
+    },
+    {
+     "key": "energy_accumulated",
+     "type": "float64",
+     "formula": "energy_accumulated + energy_delta_kwh"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_SELF_REFERENCE",
+   "notes": "Verified validator-VALID (pure self-edge stripped at line 53 -> in_degree 0 -> eval_order 0). At runtime energy_accumulated references itself before it is inserted into ctx -> meval Err -> NaN -> NULL. Both oracles converge to NaN/NULL. Contradicts the original prompt claim that self-reference raises CIRCULAR. || UPDATED for DP1 fix: the validator now rejects any key referenced in its own formula with FORMULA_SELF_REFERENCE (a 1-node cycle). The old behavior (accepted, then permanent NULL at runtime) was the DP1 bug.",
+   "review_note": "updated 2026-06-10: DP1 fixed \u2014 self-reference now rejected at validation."
+  },
+  {
+   "category": "electrical_realistic",
+   "name": "text_status_field_in_formula",
+   "description": "Derived field multiplies active power by a Text-typed regular field (a status string mistakenly used as a multiplier). Validator passes (key exists, no type check) but Text->None in as_f64 so var missing at runtime -> NaN -> NULL.",
+   "fields": [
+    {
+     "key": "active_power_total_kw",
+     "type": "float32"
+    },
+    {
+     "key": "meter_status",
+     "type": "text"
+    },
+    {
+     "key": "power_gated_kw",
+     "type": "float64",
+     "formula": "active_power_total_kw * meter_status"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_NON_NUMERIC_FIELD",
+   "notes": "UPDATED: the validator now rejects formulas referencing a field whose declared type is non-numeric (Text never enters the meval ctx -> permanent NULL). FORMULA_NON_NUMERIC_FIELD:power_gated_kw:meter_status.",
+   "review_note": "updated 2026-06-10: closes the prior SKIP \u2014 validator-level type check added."
+  },
+  {
+   "category": "electrical_realistic",
+   "name": "thd_ratio_sqrt_negative_null",
+   "description": "Distortion-power THD-like ratio where the harmonic term goes negative under sqrt: sqrt(apparent^2 - fundamental^2) with apparent<fundamental due to bad reads -> sqrt(negative) -> NaN -> NULL on the distortion field, and the ratio that consumes it also goes NaN (cascade).",
+   "fields": [
+    {
+     "key": "apparent_power_kva",
+     "type": "float32"
+    },
+    {
+     "key": "fundamental_power_kva",
+     "type": "float32"
+    },
+    {
+     "key": "distortion_power_kvad",
+     "type": "float64",
+     "formula": "sqrt(apparent_power_kva^2 - fundamental_power_kva^2)"
+    },
+    {
+     "key": "thd_ratio",
+     "type": "float64",
+     "formula": "distortion_power_kvad / fundamental_power_kva"
+    }
+   ],
+   "device_values": {
+    "apparent_power_kva": 90,
+    "fundamental_power_kva": 100
+   },
+   "expect_kind": "valid",
+   "error_prefix": "",
+   "notes": "Validator VALID (all vars known, no cycle; ^ is power). apparent<fundamental -> 90^2-100^2 = -1900 -> sqrt(neg)=NaN -> distortion_power_kvad NULL, NOT inserted into ctx. thd_ratio then sees missing distortion var -> NaN -> NULL. Fixpoint oracle gets NaN/100 -> NaN; both converge.",
+   "review_note": "ok \u2014 confirmed validator accepts; NaN-cascade mechanism matches main.rs (failed field absent from ctx)."
+  },
+  {
+   "category": "electrical_realistic",
+   "name": "overcurrent_flag_pf_lead_lag_chain",
+   "description": "Threshold-style derived chain with division and abs: current_avg from three phases, load_pct = current_avg/rated*100, headroom_pct = abs(100-load_pct). Probes abs() on a derived value plus a realistic 3-level chain with a rated-current regular constant.",
+   "fields": [
+    {
+     "key": "current_l1",
+     "type": "float32"
+    },
+    {
+     "key": "current_l2",
+     "type": "float32"
+    },
+    {
+     "key": "current_l3",
+     "type": "float32"
+    },
+    {
+     "key": "rated_current_a",
+     "type": "float32"
+    },
+    {
+     "key": "current_avg",
+     "type": "float64",
+     "formula": "(current_l1 + current_l2 + current_l3) / 3"
+    },
+    {
+     "key": "load_pct",
+     "type": "float64",
+     "formula": "current_avg / rated_current_a * 100"
+    },
+    {
+     "key": "headroom_pct",
+     "type": "float64",
+     "formula": "abs(100 - load_pct)"
+    }
+   ],
+   "device_values": {
+    "current_l1": 90,
+    "current_l2": 96,
+    "current_l3": 102,
+    "rated_current_a": 80
+   },
+   "expect_kind": "valid",
+   "error_prefix": "",
+   "notes": "Verified VALID. current_avg=96, load_pct=96/80*100=120, headroom_pct=abs(100-120)=20. Chain eval_order: current_avg(0) -> load_pct(1) -> headroom_pct(2). abs() applied over a derived value.",
+   "review_note": "ok \u2014 confirmed via validator; all regular fields have device_values."
+  },
+  {
+   "category": "deep_chains_and_stress",
+   "name": "linear_chain_20_shuffled",
+   "description": "20-level linear chain f1=base+1 ... f20=f19+1, declared in heavily shuffled order. Stresses Kahn topo-sort to recover the correct evaluation order from non-sequential field declaration.",
+   "fields": [
+    {
+     "key": "base",
+     "type": "int32"
+    },
+    {
+     "key": "f11",
+     "formula": "f10+1"
+    },
+    {
+     "key": "f3",
+     "formula": "f2+1"
+    },
+    {
+     "key": "f19",
+     "formula": "f18+1"
+    },
+    {
+     "key": "f1",
+     "formula": "base+1"
+    },
+    {
+     "key": "f7",
+     "formula": "f6+1"
+    },
+    {
+     "key": "f14",
+     "formula": "f13+1"
+    },
+    {
+     "key": "f2",
+     "formula": "f1+1"
+    },
+    {
+     "key": "f20",
+     "formula": "f19+1"
+    },
+    {
+     "key": "f9",
+     "formula": "f8+1"
+    },
+    {
+     "key": "f5",
+     "formula": "f4+1"
+    },
+    {
+     "key": "f16",
+     "formula": "f15+1"
+    },
+    {
+     "key": "f12",
+     "formula": "f11+1"
+    },
+    {
+     "key": "f4",
+     "formula": "f3+1"
+    },
+    {
+     "key": "f18",
+     "formula": "f17+1"
+    },
+    {
+     "key": "f8",
+     "formula": "f7+1"
+    },
+    {
+     "key": "f6",
+     "formula": "f5+1"
+    },
+    {
+     "key": "f13",
+     "formula": "f12+1"
+    },
+    {
+     "key": "f10",
+     "formula": "f9+1"
+    },
+    {
+     "key": "f15",
+     "formula": "f14+1"
+    },
+    {
+     "key": "f17",
+     "formula": "f16+1"
+    }
+   ],
+   "device_values": {
+    "base": 100
+   },
+   "expect_kind": "valid",
+   "error_prefix": "",
+   "notes": "Verified VALID, all 20 derived ordered. Final f20 = base+20 = 120. Shuffled-declaration topo-sort produces correct chained result.",
+   "review_note": "ok \u2014 confirmed all 20 links present (f1..f20) and validator orders them."
+  },
+  {
+   "category": "deep_chains_and_stress",
+   "name": "linear_chain_25_reverse",
+   "description": "25-level linear chain declared in strict REVERSE order (g25 first, seed last). Worst-case for a naive in-order single pass; forces full topo recovery.",
+   "fields": [
+    {
+     "key": "g25",
+     "formula": "g24*1+0.5"
+    },
+    {
+     "key": "g24",
+     "formula": "g23+0.5"
+    },
+    {
+     "key": "g23",
+     "formula": "g22+0.5"
+    },
+    {
+     "key": "g22",
+     "formula": "g21+0.5"
+    },
+    {
+     "key": "g21",
+     "formula": "g20+0.5"
+    },
+    {
+     "key": "g20",
+     "formula": "g19+0.5"
+    },
+    {
+     "key": "g19",
+     "formula": "g18+0.5"
+    },
+    {
+     "key": "g18",
+     "formula": "g17+0.5"
+    },
+    {
+     "key": "g17",
+     "formula": "g16+0.5"
+    },
+    {
+     "key": "g16",
+     "formula": "g15+0.5"
+    },
+    {
+     "key": "g15",
+     "formula": "g14+0.5"
+    },
+    {
+     "key": "g14",
+     "formula": "g13+0.5"
+    },
+    {
+     "key": "g13",
+     "formula": "g12+0.5"
+    },
+    {
+     "key": "g12",
+     "formula": "g11+0.5"
+    },
+    {
+     "key": "g11",
+     "formula": "g10+0.5"
+    },
+    {
+     "key": "g10",
+     "formula": "g9+0.5"
+    },
+    {
+     "key": "g9",
+     "formula": "g8+0.5"
+    },
+    {
+     "key": "g8",
+     "formula": "g7+0.5"
+    },
+    {
+     "key": "g7",
+     "formula": "g6+0.5"
+    },
+    {
+     "key": "g6",
+     "formula": "g5+0.5"
+    },
+    {
+     "key": "g5",
+     "formula": "g4+0.5"
+    },
+    {
+     "key": "g4",
+     "formula": "g3+0.5"
+    },
+    {
+     "key": "g3",
+     "formula": "g2+0.5"
+    },
+    {
+     "key": "g2",
+     "formula": "g1+0.5"
+    },
+    {
+     "key": "g1",
+     "formula": "seed+0.5"
+    },
+    {
+     "key": "seed",
+     "type": "float64"
+    }
+   ],
+   "device_values": {
+    "seed": 0
+   },
+   "expect_kind": "valid",
+   "error_prefix": "",
+   "notes": "Verified VALID, all 25 derived ordered. g25 = seed + 25*0.5 = 12.5. Reverse declaration order stresses topo sort maximally.",
+   "review_note": "ok \u2014 confirmed via validator."
+  },
+  {
+   "category": "deep_chains_and_stress",
+   "name": "balanced_binary_tree",
+   "description": "Balanced binary dependency tree: 4 leaves (derived from one regular), 2 mid nodes summing pairs, 1 root summing mids. Tests fan-in convergence with multiple valid topo orders.",
+   "fields": [
+    {
+     "key": "x",
+     "type": "int32"
+    },
+    {
+     "key": "root",
+     "formula": "midA+midB"
+    },
+    {
+     "key": "leaf1",
+     "formula": "x+1"
+    },
+    {
+     "key": "leaf2",
+     "formula": "x+2"
+    },
+    {
+     "key": "leaf3",
+     "formula": "x+3"
+    },
+    {
+     "key": "leaf4",
+     "formula": "x+4"
+    },
+    {
+     "key": "midA",
+     "formula": "leaf1+leaf2"
+    },
+    {
+     "key": "midB",
+     "formula": "leaf3+leaf4"
+    }
+   ],
+   "device_values": {
+    "x": 10
+   },
+   "expect_kind": "valid",
+   "error_prefix": "",
+   "notes": "Verified VALID. leaves=11,12,13,14; midA=23, midB=27; root=50. Three-level fan-in; multiple valid eval orders all converge to the same values.",
+   "review_note": "ok \u2014 confirmed via validator."
+  },
+  {
+   "category": "deep_chains_and_stress",
+   "name": "dag_one_regular_feeds_ten",
+   "description": "DAG: a single regular field feeds 10 independent derived fields, which all feed one final aggregate. Stresses wide fan-out then wide fan-in to a single sink.",
+   "fields": [
+    {
+     "key": "src",
+     "type": "float64"
+    },
+    {
+     "key": "d0",
+     "formula": "src*1"
+    },
+    {
+     "key": "d1",
+     "formula": "src*2"
+    },
+    {
+     "key": "d2",
+     "formula": "src*3"
+    },
+    {
+     "key": "d3",
+     "formula": "src*4"
+    },
+    {
+     "key": "d4",
+     "formula": "src*5"
+    },
+    {
+     "key": "d5",
+     "formula": "src*6"
+    },
+    {
+     "key": "d6",
+     "formula": "src*7"
+    },
+    {
+     "key": "d7",
+     "formula": "src*8"
+    },
+    {
+     "key": "d8",
+     "formula": "src*9"
+    },
+    {
+     "key": "d9",
+     "formula": "src*10"
+    },
+    {
+     "key": "agg",
+     "formula": "d0+d1+d2+d3+d4+d5+d6+d7+d8+d9"
+    }
+   ],
+   "device_values": {
+    "src": 2
+   },
+   "expect_kind": "valid",
+   "error_prefix": "",
+   "notes": "Verified VALID, 11 derived ordered. agg = src*(1+2+...+10) = 2*55 = 110. The 10 mids depend only on regular src -> in_degree 0 (eval_order 0..9 by lexicographic key sort); agg depends on all 10 -> eval_order 10.",
+   "review_note": "ok \u2014 confirmed via validator (corrected internal note: agg eval_order is 10, mids 0..9)."
+  },
+  {
+   "category": "deep_chains_and_stress",
+   "name": "lexicographic_tiebreak_independent",
+   "description": "Several independent derived fields (no inter-deps), all in_degree 0, declared out of alphabetical order. Probes that Kahn's queue.sort() gives deterministic lexicographic eval_order regardless of declaration order.",
+   "fields": [
+    {
+     "key": "n",
+     "type": "int32"
+    },
+    {
+     "key": "zeta",
+     "formula": "n+26"
+    },
+    {
+     "key": "alpha",
+     "formula": "n+1"
+    },
+    {
+     "key": "mike",
+     "formula": "n+13"
+    },
+    {
+     "key": "bravo",
+     "formula": "n+2"
+    },
+    {
+     "key": "_under",
+     "formula": "n+99"
+    },
+    {
+     "key": "Apple",
+     "formula": "n+65"
+    }
+   ],
+   "device_values": {
+    "n": 0
+   },
+   "expect_kind": "valid",
+   "error_prefix": "",
+   "notes": "Verified: eval_order by ASCII lexicographic sort = Apple(0), _under(1), alpha(2), bravo(3), mike(4), zeta(5) \u2014 uppercase(65) < underscore(95) < lowercase(97). Output VALUES are order-independent; this probes determinism of eval_order only.",
+   "review_note": "ok \u2014 confirmed exact eval_order assignment via validator run."
+  },
+  {
+   "category": "deep_chains_and_stress",
+   "name": "diamond_with_chained_branches",
+   "description": "Diamond DAG with multi-level branches: top splits into two chains of differing depth that re-merge at a single sink. Tests that asymmetric path lengths still resolve correctly.",
+   "fields": [
+    {
+     "key": "top",
+     "type": "float64"
+    },
+    {
+     "key": "sink",
+     "formula": "longC+shortB"
+    },
+    {
+     "key": "shortA",
+     "formula": "top+1"
+    },
+    {
+     "key": "shortB",
+     "formula": "shortA*2"
+    },
+    {
+     "key": "longA",
+     "formula": "top+5"
+    },
+    {
+     "key": "longB",
+     "formula": "longA*3"
+    },
+    {
+     "key": "longC",
+     "formula": "longB-2"
+    }
+   ],
+   "device_values": {
+    "top": 4
+   },
+   "expect_kind": "valid",
+   "error_prefix": "",
+   "notes": "Verified VALID. shortA=5, shortB=10; longA=9, longB=27, longC=25; sink=25+10=35. Asymmetric path depths (2 vs 3) re-merge at sink.",
+   "review_note": "ok \u2014 confirmed via validator."
+  },
+  {
+   "category": "deep_chains_and_stress",
+   "name": "deep_chain_with_nan_poison_midway",
+   "description": "15-level chain where one mid-level field divides 0/0 -> NaN, poisoning every downstream field via the missing-context-var cascade. Stresses NaN propagation through a deep chain.",
+   "fields": [
+    {
+     "key": "p0",
+     "type": "int32"
+    },
+    {
+     "key": "p1",
+     "formula": "p0+1"
+    },
+    {
+     "key": "p2",
+     "formula": "p1+1"
+    },
+    {
+     "key": "p3",
+     "formula": "p2+1"
+    },
+    {
+     "key": "p4",
+     "formula": "p3+1"
+    },
+    {
+     "key": "p5",
+     "formula": "p4+1"
+    },
+    {
+     "key": "p6",
+     "formula": "p5+1"
+    },
+    {
+     "key": "p7",
+     "formula": "(p6-p6)/(p6-p6)"
+    },
+    {
+     "key": "p8",
+     "formula": "p7+1"
+    },
+    {
+     "key": "p9",
+     "formula": "p8+1"
+    },
+    {
+     "key": "p10",
+     "formula": "p9+1"
+    },
+    {
+     "key": "p11",
+     "formula": "p10+1"
+    },
+    {
+     "key": "p12",
+     "formula": "p11+1"
+    },
+    {
+     "key": "p13",
+     "formula": "p12+1"
+    },
+    {
+     "key": "p14",
+     "formula": "p13+1"
+    }
+   ],
+   "device_values": {
+    "p0": 0
+   },
+   "expect_kind": "valid",
+   "error_prefix": "",
+   "notes": "Verified validator VALID (all vars known, no cycle). p1..p6 valid ints (p6=6); p7 = 0/0 = NaN -> NULL, NOT inserted into ctx. p8 then references missing p7 -> Err -> NaN, cascading p8..p14 all NULL. Both oracles converge to NaN (poison vs missing-var, same result).",
+   "review_note": "ok \u2014 confirmed validator accepts; NaN-cascade matches main.rs failed-field-absent-from-ctx behavior."
+  },
+  {
+   "category": "deep_chains_and_stress",
+   "name": "chain_with_infinity_propagation",
+   "description": "Deep chain that hits +inf via division by zero, then multiplies/adds it forward. inf op finite stays inf, so downstream fields propagate Infinity rather than NaN.",
+   "fields": [
+    {
+     "key": "q",
+     "type": "float64"
+    },
+    {
+     "key": "r1",
+     "formula": "1/q"
+    },
+    {
+     "key": "r2",
+     "formula": "r1*2"
+    },
+    {
+     "key": "r3",
+     "formula": "r2+1000"
+    },
+    {
+     "key": "r4",
+     "formula": "r3*1"
+    },
+    {
+     "key": "r5",
+     "formula": "r4-5"
+    }
+   ],
+   "device_values": {
+    "q": 0
+   },
+   "expect_kind": "valid",
+   "error_prefix": "",
+   "notes": "UPDATED for new engine semantics: r1 = 1/0 = +inf -> NULL, not fed to ctx; r2..r5 cascade to NULL via unknown-var Err. The old Infinity-propagation behavior was the DP4 hazard (Infinity poisoning SQL aggregates) and is gone.",
+   "review_note": "ok \u2014 confirmed via validator; infinity-propagation semantics match grounding."
+  },
+  {
+   "category": "deep_chains_and_stress",
+   "name": "wide_fanout_with_one_unknown_var",
+   "description": "Wide DAG (4 derived from one regular plus a sink) where the FIRST derived field in source order references an undefined identifier. Validator must raise FORMULA_UNKNOWN_VARS on that first defect before any topo work.",
+   "fields": [
+    {
+     "key": "base",
+     "type": "float64"
+    },
+    {
+     "key": "w0",
+     "formula": "base+ghost"
+    },
+    {
+     "key": "w1",
+     "formula": "base*2"
+    },
+    {
+     "key": "w2",
+     "formula": "base*3"
+    },
+    {
+     "key": "w3",
+     "formula": "base*4"
+    },
+    {
+     "key": "final",
+     "formula": "w1+w2+w3"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_UNKNOWN_VARS",
+   "notes": "Verified: FORMULA_UNKNOWN_VARS:w0:ghost. 'ghost' is neither a field key nor an allowed function. Fires on the first derived field in source order, before topo sort. No device_values needed.",
+   "review_note": "ok \u2014 confirmed exact message via validator run."
+  },
+  {
+   "category": "deep_chains_and_stress",
+   "name": "deep_chain_with_buried_cycle",
+   "description": "A long valid linear chain plus a 3-node cycle (c1<-c3<-c2<-c1) buried inside it. The cyclic nodes never reach in_degree 0 and remain unresolved -> FORMULA_CIRCULAR_DEPENDENCY.",
+   "fields": [
+    {
+     "key": "h0",
+     "type": "int32"
+    },
+    {
+     "key": "h1",
+     "formula": "h0+1"
+    },
+    {
+     "key": "h2",
+     "formula": "h1+1"
+    },
+    {
+     "key": "h3",
+     "formula": "h2+1"
+    },
+    {
+     "key": "c1",
+     "formula": "c3+1"
+    },
+    {
+     "key": "c2",
+     "formula": "c1+1"
+    },
+    {
+     "key": "c3",
+     "formula": "c2+1"
+    },
+    {
+     "key": "h4",
+     "formula": "h3+1"
+    },
+    {
+     "key": "h5",
+     "formula": "h4+1"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_CIRCULAR_DEPENDENCY",
+   "notes": "Verified: FORMULA_CIRCULAR_DEPENDENCY:c1,c2,c3 (unresolved sorted). h1..h5 form a valid chain; c1->c3, c2->c1, c3->c2 is a 3-cycle. All identifiers are known field keys so UNKNOWN_VARS does not fire first.",
+   "review_note": "ok \u2014 confirmed exact message via validator run."
+  },
+  {
+   "category": "deep_chains_and_stress",
+   "name": "duplicate_key_phantom_cycle",
+   "description": "A chain where a derived field key (s1) is declared twice. The standalone validator has NO duplicate detection; the second s1 OVERWRITES deps[s1], and because s1 and s2 then point at each other, a phantom 2-node cycle is created -> FORMULA_CIRCULAR_DEPENDENCY (NOT FIELD_KEY_DUPLICATE).",
+   "fields": [
+    {
+     "key": "m",
+     "type": "int32"
+    },
+    {
+     "key": "s1",
+     "formula": "m+1"
+    },
+    {
+     "key": "s2",
+     "formula": "s1+1"
+    },
+    {
+     "key": "s1",
+     "formula": "s2+1"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FIELD_KEY_DUPLICATE",
+   "notes": "REWRITTEN. Original expected FIELD_KEY_DUPLICATE, which is a ROUTER-level check in create_schema (line 114-115) and is NEVER raised by the target validator _validate_and_order_derived_fields. Empirically the validator processes both s1 entries; the second formula (s2+1) overwrites deps[s1]={s2}, while deps[s2]={s1}, forming a 2-node cycle. Verified output: FORMULA_CIRCULAR_DEPENDENCY:s1,s2. all_keys dedupes via set() so no UNKNOWN_VARS. This is a genuine adversarial probe of how a duplicate key silently corrupts the dependency graph in the validator. || UPDATED for DP6(d) fix: the validator now has its own duplicate-key guard (defense-in-depth for import/Store entry points), so the dup is rejected as FIELD_KEY_DUPLICATE:s1 before the phantom cycle can form.",
+   "review_note": "updated 2026-06-10: DP6(d) fixed \u2014 validator-level duplicate detection added."
+  },
+  {
+   "category": "deep_chains_and_stress",
+   "name": "chain_referencing_only_regular_fields_no_edges",
+   "description": "5 derived fields each depending ONLY on regular fields a/b/c (no derived->derived edges). All in_degree 0, so output is order-independent; eval_order is assigned 0..4 by lexicographic Kahn pops. Verifies regular-field deps add no graph edges.",
+   "fields": [
+    {
+     "key": "a",
+     "type": "float64"
+    },
+    {
+     "key": "b",
+     "type": "float64"
+    },
+    {
+     "key": "c",
+     "type": "float64"
+    },
+    {
+     "key": "da",
+     "formula": "a*a"
+    },
+    {
+     "key": "db",
+     "formula": "b+c"
+    },
+    {
+     "key": "dc",
+     "formula": "sqrt(a)"
+    },
+    {
+     "key": "dd",
+     "formula": "abs(b-c)"
+    },
+    {
+     "key": "de",
+     "formula": "max(a,b)"
+    }
+   ],
+   "device_values": {
+    "a": 9,
+    "b": 4,
+    "c": 3
+   },
+   "expect_kind": "valid",
+   "notes": "da=81, db=7, dc=3, dd=1, de=9. All 5 derived depend only on regular fields a/b/c, so deps[k] is empty for every derived -> in_degree 0. CORRECTION to original author: eval_order is NOT all 0; Kahn pops one at a time incrementing idx, so with lexicographic tie-break eval_order is da=0,db=1,dc=2,dd=3,de=4. Result is still fully order-independent because there are NO inter-derived edges. Verifies regular-field deps add NO edge.",
+   "review_note": "Fixed factual error: original description/notes claimed 'all eval_order 0'. The validator assigns distinct eval_orders 0..4 via Kahn's idx increment (lexicographic tie-break: da,db,dc,dd,de). Output remains order-independent. Confirmed VALID via standalone run of the actual validator logic; numeric outputs unchanged. Also corrected description's '10 derived fields' -> actual count is 5."
+  },
+  {
+   "category": "deep_chains_and_stress",
+   "name": "self_reference_in_chain_runtime_null",
+   "description": "Mid-chain field references ITSELF (sr = sr + base). Per validator line 53 the self-edge is stripped, so this is VALID at validate-time but yields NULL at runtime (sr not yet a ctx var). Downstream field t2 then cascades to NULL too.",
+   "fields": [
+    {
+     "key": "base",
+     "type": "int32"
+    },
+    {
+     "key": "t1",
+     "formula": "base+1"
+    },
+    {
+     "key": "sr",
+     "formula": "sr+base"
+    },
+    {
+     "key": "t2",
+     "formula": "sr+t1"
+    }
+   ],
+   "expect_kind": "error",
+   "notes": "VALIDATOR-VALID (self-edge stripped at line 53, sr gets in_degree 0; eval_order from actual run: sr=0,t1=1,t2=2). RUNTIME: t1=6 (ok). sr=sr+base -> 'sr' is not in ctx (a derived field, not a device value) -> Err -> NaN -> NULL; sr NOT inserted into ctx. t2=sr+t1 -> 'sr' missing in ctx -> Err -> NaN -> NULL. So sr and t2 are NULL, t1=6. Contradicts the naive expectation that self-ref raises CIRCULAR. || UPDATED for DP1 fix: the validator now rejects any key referenced in its own formula with FORMULA_SELF_REFERENCE (a 1-node cycle). The old behavior (accepted, then permanent NULL at runtime) was the DP1 bug.",
+   "review_note": "updated 2026-06-10: DP1 fixed \u2014 self-reference now rejected at validation.",
+   "error_prefix": "FORMULA_SELF_REFERENCE"
+  },
+  {
+   "category": "validator_hardening",
+   "name": "syntax_invalid_adjacent_operators",
+   "description": "DP6(a): formula with adjacent binary operators 'v +* 2' must be rejected at validation (previously regex-only var extraction accepted any garbage, failing every row at runtime).",
+   "fields": [
+    {
+     "key": "v",
+     "type": "float32"
+    },
+    {
+     "key": "bad",
+     "type": "float64",
+     "formula": "v +* 2"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_SYNTAX_INVALID",
+   "notes": "Parser: after '+', parse_factor sees '*' -> unexpected token. Added 2026-06-10 with the DP6(a) syntax checker."
+  },
+  {
+   "category": "validator_hardening",
+   "name": "syntax_invalid_sql_text",
+   "description": "DP6(a): non-expression text like 'DROP TABLE x' must be rejected (identifier juxtaposition is not valid meval grammar).",
+   "fields": [
+    {
+     "key": "x",
+     "type": "float32"
+    },
+    {
+     "key": "bad",
+     "type": "float64",
+     "formula": "DROP TABLE x"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_SYNTAX_INVALID",
+   "notes": "Tokens DROP, TABLE, x: 'DROP' parses as a variable, then 'TABLE' is a trailing token -> syntax error. Added 2026-06-10."
+  },
+  {
+   "category": "validator_hardening",
+   "name": "pow_rejected_unknown_function",
+   "description": "DP3: pow() was in the old whitelist but meval 0.2 has no pow builtin \u2014 every row evaluated to NULL at runtime. Now rejected at validation.",
+   "fields": [
+    {
+     "key": "v",
+     "type": "float32"
+    },
+    {
+     "key": "sq",
+     "type": "float64",
+     "formula": "pow(v, 2)"
+    }
+   ],
+   "expect_kind": "error",
+   "error_prefix": "FORMULA_UNKNOWN_FUNCTION",
+   "notes": "Use 'v^2' instead. Added 2026-06-10 with the corrected meval whitelist."
+  },
+  {
+   "category": "validator_hardening",
+   "name": "meval_builtins_floor_round_atan2_pi",
+   "description": "DP3: real meval builtins (floor, round, atan2) and the constant pi were previously FALSELY rejected as unknown vars. Now validated and evaluated.",
+   "fields": [
+    {
+     "key": "a",
+     "type": "float64"
+    },
+    {
+     "key": "b",
+     "type": "float64"
+    },
+    {
+     "key": "ang",
+     "type": "float64",
+     "formula": "atan2(a, b) / pi"
+    },
+    {
+     "key": "rounded",
+     "type": "float64",
+     "formula": "floor(a) + round(b)"
+    }
+   ],
+   "device_values": {
+    "a": 1.0,
+    "b": 1.0
+   },
+   "expect_kind": "valid",
+   "notes": "atan2(1,1)/pi = 0.25; floor(1)+round(1) = 2. pi is a predefined meval Context var. Added 2026-06-10."
+  }
+ ]
+}

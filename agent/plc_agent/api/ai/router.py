@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -20,13 +21,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ..permissions import get_claims  # used by session entry endpoints
+from ..permissions import get_claims, require_logger_write
 from ..security import decode_jwt, extract_bearer_token
 from .session import AISession, _SESSIONS_BASE
 
 logger = logging.getLogger("loggerfast.ai.router")
 
-router = APIRouter(prefix="/ai", tags=["ai"])
+# C3: fail-safe router-level auth — EVERY /ai endpoint requires a valid JWT,
+# even ones added later without their own Depends. Destructive/write
+# endpoints additionally carry require_logger_write. (The AI feature itself
+# stays gated behind LOGGER_ENABLE_AI, default off.)
+router = APIRouter(prefix="/ai", tags=["ai"], dependencies=[Depends(get_claims)])
 
 
 def _username(claims: dict) -> str:
@@ -288,7 +293,7 @@ def _get_session_lock(session_id: str) -> asyncio.Lock:
     return _session_locks[session_id]
 
 
-@router.post("/sessions/{session_id}/approve")
+@router.post("/sessions/{session_id}/approve", dependencies=[Depends(require_logger_write)])  # C3: write guard
 async def approve_plan(session_id: str, request: Request, body: ApproveRequest = ApproveRequest()):
     """Approve a staged configuration plan for execution.
 
@@ -361,7 +366,7 @@ async def discard_plan(session_id: str):
     return {"status": "ok", "session_id": session_id, "state": session.state.value}
 
 
-@router.post("/sessions/{session_id}/apply")
+@router.post("/sessions/{session_id}/apply", dependencies=[Depends(require_logger_write)])  # C3: write guard
 async def apply_plan(session_id: str):
     """Execute the approved plan. Streams NDJSON progress events.
 
@@ -502,7 +507,7 @@ def get_device_temporal_status(device_id: str):
     return {"device_id": device_id, "temporal": status.to_dict()}
 
 
-@router.post("/predictions/temporal/{device_id}/retrain")
+@router.post("/predictions/temporal/{device_id}/retrain", dependencies=[Depends(require_logger_write)])  # C3: write guard
 async def retrain_temporal_model_endpoint(device_id: str):
     """Trigger retraining of a device's temporal model."""
     try:
@@ -710,7 +715,7 @@ def marketplace_get_entry(skill_id: str):
     return entry.to_dict()
 
 
-@router.post("/marketplace/import")
+@router.post("/marketplace/import", dependencies=[Depends(require_logger_write)])  # C3: write guard
 def marketplace_import_endpoint(body: dict):
     """Bulk import skills from another deployment."""
     try:
@@ -734,7 +739,7 @@ def marketplace_export_endpoint(min_rating: float = 0.0):
     return {"skills": mp.export_skills(min_rating=min_rating)}
 
 
-@router.post("/marketplace/publish")
+@router.post("/marketplace/publish", dependencies=[Depends(require_logger_write)])  # C3: write guard
 def marketplace_publish_endpoint(body: dict):
     """Publish a skill to the marketplace."""
     try:
@@ -854,7 +859,7 @@ def export_training_dataset(model: str):
     )
 
 
-@router.post("/anomaly/training-data/{model}/import")
+@router.post("/anomaly/training-data/{model}/import", dependencies=[Depends(require_logger_write)])  # C3: write guard
 async def import_training_dataset(model: str, request=None):
     """Import a training dataset from .npz bytes."""
     from .validation.training_data import import_dataset
@@ -873,7 +878,7 @@ async def import_training_dataset(model: str, request=None):
     return {"status": "ok", "model": key, "total_samples": total}
 
 
-@router.post("/anomaly/retrain/{model}")
+@router.post("/anomaly/retrain/{model}", dependencies=[Depends(require_logger_write)])  # C3: write guard
 async def retrain_anomaly(model: str):
     """Trigger retraining of an anomaly model with real + synthetic data."""
     from .validation.anomaly import AnomalyDetector, _sanitize_key
@@ -957,22 +962,40 @@ def export_skills():
     return {"skills": exported, "count": len(exported)}
 
 
-@router.post("/skills/import")
+_SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_SKILL_FILE_EXTS = {".md", ".txt", ".json", ".yaml", ".yml"}
+
+
+@router.post("/skills/import", dependencies=[Depends(require_logger_write)])  # C3: write guard
 def import_skills(body: dict):
-    """Import skills from JSON export."""
+    """Import skills from JSON export.
+
+    SEC-4 hardening: skill names are charset-validated, file paths are
+    reduced to their basename, extensions are whitelisted and the resolved
+    target must stay inside the skills directory (no path traversal).
+    """
     skills = body.get("skills", [])
     if not skills:
         raise HTTPException(status_code=422, detail="NO_SKILLS")
+    base = _SKILLS_DIR.resolve()
     imported = 0
     for skill in skills:
-        name = skill.get("name", "").strip()
-        if not name:
+        name = (skill.get("name") or "").strip()
+        if not name or not _SKILL_NAME_RE.match(name):
             continue
         skill_dir = _SKILLS_DIR / name
         skill_dir.mkdir(parents=True, exist_ok=True)
         for rel_path, content in skill.get("files", {}).items():
-            target = skill_dir / rel_path
-            target.parent.mkdir(parents=True, exist_ok=True)
+            # basename-only: strips directories, '..' segments and drive parts
+            fname = Path(str(rel_path).replace("\\", "/")).name
+            if not fname or fname.startswith("."):
+                continue
+            if Path(fname).suffix.lower() not in _SKILL_FILE_EXTS:
+                continue
+            target = (skill_dir / fname).resolve()
+            # containment check — must remain inside ~/.hermes/skills
+            if base not in target.parents:
+                continue
             target.write_text(content, encoding="utf-8")
         imported += 1
     return {"status": "ok", "imported": imported}
@@ -981,6 +1004,8 @@ def import_skills(body: dict):
 @router.get("/skills/{skill_id}")
 def get_skill(skill_id: str):
     """Get a specific skill's full content."""
+    if not _SKILL_NAME_RE.match(skill_id):  # SEC-4: no traversal via id
+        raise HTTPException(status_code=404, detail="SKILL_NOT_FOUND")
     skill_dir = _SKILLS_DIR / skill_id
     if not skill_dir.exists() or not skill_dir.is_dir():
         raise HTTPException(status_code=404, detail="SKILL_NOT_FOUND")
@@ -993,9 +1018,11 @@ def get_skill(skill_id: str):
     return meta
 
 
-@router.delete("/skills/{skill_id}")
+@router.delete("/skills/{skill_id}", dependencies=[Depends(require_logger_write)])  # C3: write guard
 def delete_skill(skill_id: str):
     """Remove a skill."""
+    if not _SKILL_NAME_RE.match(skill_id):  # SEC-4: no rmtree outside base
+        raise HTTPException(status_code=404, detail="SKILL_NOT_FOUND")
     skill_dir = _SKILLS_DIR / skill_id
     if not skill_dir.exists() or not skill_dir.is_dir():
         raise HTTPException(status_code=404, detail="SKILL_NOT_FOUND")
@@ -1020,7 +1047,7 @@ class RawReadRequest(BaseModel):
     node_id: Optional[str] = None
 
 
-@router.post("/raw_read")
+@router.post("/raw_read", dependencies=[Depends(require_logger_write)])  # C3: write guard
 async def raw_read(body: RawReadRequest):
     """Raw Modbus register read or OPC UA node browse — no session needed."""
     from .tools import read_raw_registers, browse_opcua_nodes, ToolContext

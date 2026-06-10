@@ -29,6 +29,23 @@ def has_logger_write_role(claims: Dict[str, Any]) -> bool:
     return "logger-write" in roles or "logger_write" in roles
 
 
+_ADMIN_ROLE_NAMES = {"neuract-admin", "neuract_admin", "admin"}
+
+
+def _all_roles(claims: Dict[str, Any]) -> set[str]:
+    """Realm roles + every client's roles from resource_access."""
+    roles = set(_get_roles(claims))
+    for client in (claims.get("resource_access") or {}).values():
+        for r in (client or {}).get("roles") or []:
+            roles.add(r)
+    return roles
+
+
+def has_admin_role(claims: Dict[str, Any]) -> bool:
+    """neuract-admin is a Keycloak *client* role, so scan realm + client roles."""
+    return bool(_all_roles(claims) & _ADMIN_ROLE_NAMES)
+
+
 async def get_claims(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
@@ -101,11 +118,40 @@ async def require_safe_or_write(
     request: Request,
     claims: Dict[str, Any] = Depends(get_claims),
 ) -> Dict[str, Any]:
-    """SAFE methods need valid token only; UNSAFE methods need logger_write role."""
+    """SAFE methods need logger_read (or write/admin); UNSAFE need logger_write.
+
+    C2 remainder: a merely-valid token (zero roles) must not grant read access,
+    otherwise any self-registered account could read every protected router.
+    """
     if request.method.upper() not in {"GET", "HEAD", "OPTIONS"}:
         if not has_logger_write_role(claims):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"success": False, "error": "INSUFFICIENT_ROLE", "message": "logger-write role required for write operations"},
             )
+    elif not (
+        has_logger_read_role(claims)
+        or has_logger_write_role(claims)
+        or has_admin_role(claims)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"success": False, "error": "INSUFFICIENT_ROLE", "message": "logger-read role required"},
+        )
+    return claims
+
+
+async def require_admin(
+    claims: Dict[str, Any] = Depends(get_claims),
+) -> Dict[str, Any]:
+    """Dependency: requires valid JWT + neuract-admin (client) role.
+
+    Use for privilege-granting and process-control endpoints (role assignment,
+    shutdown). The first admin must be bootstrapped directly in Keycloak.
+    """
+    if not has_admin_role(claims):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"success": False, "error": "INSUFFICIENT_ROLE", "message": "neuract-admin role required"},
+        )
     return claims

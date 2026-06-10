@@ -1,16 +1,29 @@
 from __future__ import annotations
 
+import re
 from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, HTTPException
 import logging
 
 from ..store import Store
+from ..redact import redact_dsn
 from sqlalchemy import create_engine, text  # type: ignore
 
 
 router = APIRouter(prefix="/mappings")
 log = logging.getLogger(__name__)
+
+# L19/SEC-2: mapping field keys become SQL column identifiers in the Rust
+# engine's INSERTs — enforce the same charset/length rule as schema fields.
+_FIELD_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_MAX_IDENT_LEN = 63
+
+
+def _validate_row_field_keys(rows: Dict[str, Any]) -> None:
+    for k in rows.keys():
+        if not isinstance(k, str) or not _FIELD_KEY_RE.match(k) or len(k) > _MAX_IDENT_LEN:
+            raise HTTPException(status_code=400, detail=f"FIELD_KEY_INVALID:{k}")
 
 
 def _resolve_table(table_id: str, *, db_target_override: Optional[str] = None) -> Dict[str, Any]:
@@ -49,16 +62,25 @@ def get_mapping(table_id: str) -> Dict[str, Any]:
         Store.instance().replace_mapping(table_id, {"deviceId": loaded.get("deviceId"), "rows": loaded.get("rows") or {}})
     m = loaded or Store.instance().get_mapping(table_id)
     schema = Store.instance().get_schema(t.get("schemaId")) or {"fields": []}
-    required = [f.get("key") for f in (schema.get("fields") or [])]
-    health = Store.instance().mapping_health(table_id, required_fields=required)
+    schema_fields = schema.get("fields") or []
+    required = [f.get("key") for f in schema_fields]
+    health = Store.instance().mapping_health(table_id, required_fields=required, schema_fields=schema_fields)
     return {"success": True, "item": {"tableId": table_id, **m}, "health": health}
 
 
 @router.post("/{table_id}")
 def upsert_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     t = _resolve_table(table_id, db_target_override=payload.get("dbTargetId"))
+    schema = Store.instance().get_schema(t.get("schemaId")) or {"fields": []}
+    schema_fields = schema.get("fields") or []
+    derived_keys = {f.get("key") for f in schema_fields if f.get("formula")}
     device_id = payload.get("deviceId")
     rows_patch = payload.get("rows") or {}
+    # Reject manual mapping of derived fields
+    for k in list(rows_patch.keys()):
+        if k in derived_keys:
+            rows_patch.pop(k)
+    _validate_row_field_keys(rows_patch)  # L19
     field_type_map = _build_field_type_map(t)
     # Enrich rows with auto-derived encoding/dataType so in-memory store stays consistent
     for k, v in rows_patch.items():
@@ -69,15 +91,17 @@ def upsert_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     _save_mapping_to_user_db(t, rows_patch, device_id, field_type_map=field_type_map)
     m = Store.instance().upsert_mapping(table_id, device_id=device_id, rows_patch=rows_patch)
     # Recompute health after save
-    schema = Store.instance().get_schema(t.get("schemaId")) or {"fields": []}
-    required = [f.get("key") for f in (schema.get("fields") or [])]
-    health = Store.instance().mapping_health(table_id, required_fields=required)
+    required = [f.get("key") for f in schema_fields]
+    health = Store.instance().mapping_health(table_id, required_fields=required, schema_fields=schema_fields)
     return {"success": True, "message": "mapping_upserted", "item": m, "health": health}
 
 
 @router.post("/{table_id}/bulk_apply")
 def bulk_apply(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     t = _resolve_table(table_id, db_target_override=payload.get("dbTargetId"))
+    schema = Store.instance().get_schema(t.get("schemaId")) or {"fields": []}
+    schema_fields = schema.get("fields") or []
+    derived_keys = {f.get("key") for f in schema_fields if f.get("formula")}
     # Accept both dict format {rows: {field: {...}}} and array format {mappings: [{field_key, ...}]}
     rows = payload.get("rows") or {}
     if not rows and isinstance(payload.get("mappings"), list):
@@ -91,6 +115,11 @@ def bulk_apply(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "scale": entry.get("scale"),
                     "deadband": entry.get("deadband"),
                 }
+    # Strip derived fields — they cannot be manually mapped
+    for k in list(rows.keys()):
+        if k in derived_keys:
+            rows.pop(k)
+    _validate_row_field_keys(rows)  # L19
     field_type_map = _build_field_type_map(t)
     for k, v in rows.items():
         if not v.get("encoding"):
@@ -109,12 +138,24 @@ def import_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     t = _resolve_table(table_id, db_target_override=payload.get("dbTargetId"))
     mapping = payload.get("mapping") or payload
     rows = mapping.get("rows") or {}
+    # DP7(b): derived rows are engine-owned — strip them from manual imports
+    # (the replace below also preserves existing protocol='derived' rows).
+    derived_keys = {
+        f.get("key")
+        for f in ((Store.instance().get_schema(t.get("schemaId")) or {}).get("fields") or [])
+        if f.get("formula")
+    }
+    for k in list(rows.keys()):
+        if k in derived_keys:
+            rows.pop(k)
+    _validate_row_field_keys(rows)  # L19
     field_type_map = _build_field_type_map(t)
     _replace_mapping_in_user_db(t, rows, mapping.get("deviceId") or payload.get("deviceId"), field_type_map=field_type_map)
-    m = Store.instance().replace_mapping(table_id, mapping)
+    m = Store.instance().replace_mapping(table_id, {"deviceId": mapping.get("deviceId") or payload.get("deviceId"), "rows": rows})
     schema = Store.instance().get_schema(t.get("schemaId")) or {"fields": []}
-    required = [f.get("key") for f in (schema.get("fields") or [])]
-    health = Store.instance().mapping_health(table_id, required_fields=required)
+    schema_fields = schema.get("fields") or []
+    required = [f.get("key") for f in schema_fields]
+    health = Store.instance().mapping_health(table_id, required_fields=required, schema_fields=schema_fields)
     return {"success": True, "message": "mapping_imported", "item": m, "health": health}
 
 
@@ -124,7 +165,9 @@ def validate_mapping(table_id: str, payload: Optional[Dict[str, Any]] = None) ->
     t = _resolve_table(table_id, db_target_override=payload.get("dbTargetId"))
     m = Store.instance().get_mapping(table_id)
     schema = Store.instance().get_schema(t.get("schemaId")) or {"fields": []}
-    required = [f.get("key") for f in (schema.get("fields") or [])]
+    schema_fields = schema.get("fields") or []
+    derived_keys = {f.get("key") for f in schema_fields if f.get("formula")}
+    required = [f.get("key") for f in schema_fields if not f.get("formula")]
     # Validate against provided payload when present (no write), else current stored mapping
     rows = (payload.get("rows") if isinstance(payload, dict) else None) or (m.get("rows") or {})
     device_id = (payload.get("deviceId") if isinstance(payload, dict) else None) or m.get("deviceId")
@@ -349,7 +392,16 @@ def preview_sample(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     # Stub non-blocking preview: returns structure without device IO
     if not Store.instance().get_table(table_id):
         raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
-    return {"success": False, "message": "PREVIEW_NOT_IMPLEMENTED", "warnings": ["stub_preview"]}
+    # H-API-3/M-API-1: an unimplemented operation must not report HTTP 200
+    # with success:false — 501 with the standard error envelope.
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "success": False,
+            "error": "PREVIEW_NOT_IMPLEMENTED",
+            "message": "preview_sample is not implemented",
+        },
+    )
 
 
 @router.post("/{table_id}/preview_60s")
@@ -563,7 +615,12 @@ def _replace_mapping_in_user_db(table: Dict[str, Any], rows: Dict[str, Dict[str,
     t_ident = _device_ident(engine, table.get("name"))
     ftm = field_type_map or {}
     with engine.begin() as conn:
-        conn.execute(text(f"DELETE FROM {m_table} WHERE table_name=:t"), {"t": t_ident["name"]})
+        # DP7(b): preserve protocol='derived' rows — they are owned by the
+        # schema/migrate pipeline, not by manual mapping replaces/imports.
+        conn.execute(
+            text(f"DELETE FROM {m_table} WHERE table_name=:t AND (protocol IS NULL OR protocol <> 'derived')"),
+            {"t": t_ident["name"]},
+        )
         for k, v in (rows or {}).items():
             enc = v.get("encoding") or ftm.get(k, "float32")
             dt = v.get("dataType") or ("int" if enc in _INT_ENCODINGS else "float")
@@ -594,7 +651,8 @@ def _load_mapping_from_user_db(table: Dict[str, Any]) -> Optional[Dict[str, Any]
         prefixed = t_ident["name"]
         m_table = _select_mapping_table(engine, create=False)
         try:
-            log.info(f"mappings._load.init: url={getattr(engine, 'url', '')} m_table={m_table} logical={logical} prefixed={prefixed}")
+            # H-OBS-4: engine.url may embed a password — redact before logging.
+            log.info(f"mappings._load.init: url={redact_dsn(getattr(engine, 'url', ''))} m_table={m_table} logical={logical} prefixed={prefixed}")
         except Exception:
             pass
         rows = []

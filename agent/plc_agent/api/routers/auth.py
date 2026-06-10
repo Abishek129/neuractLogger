@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from ..permissions import require_admin, require_logger_read
 from ..keycloak_admin import (
     KeycloakAdminError,
     get_service_account_token,
@@ -25,9 +26,10 @@ from ..keycloak_config import KEYCLOAK_ADMIN_CLIENT_ID
 router = APIRouter(prefix="/auth")
 
 
-@router.post("/register")
+@router.post("/register", dependencies=[Depends(require_admin)])
 async def register(payload: Dict[str, Any]):
-    """Create a new user in Keycloak. Public endpoint (no auth required).
+    """Create a new user in Keycloak. Admin-only (C2: anonymous
+    self-registration minted enabled Keycloak users).
 
     Body: {"username": "...", "email": "...", "password": "...",
            "first_name": "...", "last_name": "...", "enabled": true}
@@ -130,9 +132,9 @@ async def refresh(payload: Dict[str, Any]):
     return token_data
 
 
-@router.post("/assign-role/{username}")
+@router.post("/assign-role/{username}", dependencies=[Depends(require_admin)])
 async def assign_role(username: str):
-    """Assign the neuract-admin client role to a user. Public endpoint (mirrors Django)."""
+    """Assign the neuract-admin client role to a user. Admin-only."""
     try:
         token = await get_service_account_token()
 
@@ -171,7 +173,7 @@ async def assign_role(username: str):
 LOGGER_ROLES = {"logger_read", "logger_write"}
 
 
-@router.get("/roles/{username}")
+@router.get("/roles/{username}", dependencies=[Depends(require_logger_read)])
 async def get_roles(username: str):
     """Get realm roles assigned to a user."""
     try:
@@ -195,7 +197,7 @@ async def get_roles(username: str):
     }
 
 
-@router.post("/roles/{username}")
+@router.post("/roles/{username}", dependencies=[Depends(require_admin)])
 async def assign_realm_role(username: str, payload: Dict[str, Any]):
     """Assign a logger realm role to a user.
 
@@ -227,7 +229,7 @@ async def assign_realm_role(username: str, payload: Dict[str, Any]):
     return {"ok": True, "username": username, "role": role_name, "action": "assigned"}
 
 
-@router.delete("/roles/{username}")
+@router.delete("/roles/{username}", dependencies=[Depends(require_admin)])
 async def remove_realm_role(username: str, payload: Dict[str, Any]):
     """Remove a logger realm role from a user.
 

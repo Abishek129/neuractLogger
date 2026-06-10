@@ -92,14 +92,48 @@ class Store:
             self._schemas = appdb.load_schemas()
         return len(items)
 
+    def _persist_full_schema_fields(self, schema: Dict[str, Any], fields: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """DP2: re-validate and persist the FULL field set of a schema.
+
+        eval_order is recomputed across ALL derived fields and saved for every
+        one of them — the old single-field upsert left the peers' stored
+        orders incoherent (live corruption existed in meta_data_version1).
+        """
+        # Local import: routers.schemas imports Store, so module-level would cycle.
+        from .routers.schemas import _validate_and_order_derived_fields
+        work = [dict(f) for f in fields]
+        _validate_and_order_derived_fields(work)  # raises ValueError on bad formulas
+        appdb.save_schema({"id": schema["id"], "name": schema.get("name"), "fields": work})
+        self._schemas = appdb.load_schemas()
+        return next(s for s in self._schemas if s.get("id") == schema["id"])
+
     def add_schema_field(self, schema_id: str, field: Dict[str, Any]) -> Dict[str, Any]:
         with self._mtx:
             schema = next((s for s in self._schemas if s.get("id") == schema_id), None)
             if not schema:
                 raise ValueError("SCHEMA_NOT_FOUND")
-            appdb.add_schema_field(schema_id, field)
-            self._schemas = appdb.load_schemas()
-            return next(s for s in self._schemas if s.get("id") == schema_id)
+            fields = [f for f in (schema.get("fields") or []) if f.get("key") != field.get("key")]
+            fields.append(field)
+            return self._persist_full_schema_fields(schema, fields)
+
+    def update_schema_field(self, schema_id: str, field_key: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+        with self._mtx:
+            schema = next((s for s in self._schemas if s.get("id") == schema_id), None)
+            if not schema:
+                raise ValueError("SCHEMA_NOT_FOUND")
+            fields = schema.get("fields") or []
+            existing = next((f for f in fields if f.get("key") == field_key), None)
+            if not existing:
+                raise ValueError("FIELD_NOT_FOUND")
+            # DP6(c): keys present in updates overwrite even when None, so an
+            # explicitly cleared formula sticks (derived -> regular conversion).
+            merged = {**existing, **updates}
+            merged["key"] = field_key
+            if not merged.get("formula"):
+                merged["formula"] = None
+                merged["eval_order"] = None
+            new_fields = [merged if f.get("key") == field_key else f for f in fields]
+            return self._persist_full_schema_fields(schema, new_fields)
 
     def delete_schema(self, schema_id: str) -> bool:
         with self._mtx:
@@ -151,9 +185,20 @@ class Store:
         tables = payload.get("tables") or []
         if not isinstance(tables, list) or len(tables) == 0:
             raise ValueError("NO_TABLES")
-        # Preflight: reject tables with Unmapped status
+        # Preflight: reject tables with Unmapped status. Pass schema_fields so
+        # tables whose loggable fields are ALL derived are not wrongly rejected
+        # (mapping_health only requires device rows for non-derived fields).
         for tid in tables:
-            health = self.mapping_health(tid, required_fields=[f.get("key") for f in (self.get_schema(self.get_table(tid).get("schemaId") or "") or {}).get("fields", [])]) if self.get_table(tid) else "Unmapped"
+            t = self.get_table(tid)
+            if not t:
+                raise ValueError("NO_MAPPED_COLUMNS")
+            schema = self.get_schema(t.get("schemaId") or "") or {}
+            sfields = schema.get("fields", [])
+            health = self.mapping_health(
+                tid,
+                required_fields=[f.get("key") for f in sfields],
+                schema_fields=sfields,
+            )
             if health == "Unmapped":
                 raise ValueError("NO_MAPPED_COLUMNS")
         job = {
@@ -183,8 +228,13 @@ class Store:
                     j["status"] = status
                     try:
                         appdb.update_job_status(job_id, status)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # M19: the Rust engine acts on app_jobs.status — a
+                        # silent persist failure means it never starts/stops.
+                        self._log.warning(
+                            "set_job_status: appdb persist failed job=%s status=%s err=%s",
+                            job_id, status, e,
+                        )
                     return j
         return None
 
@@ -195,7 +245,10 @@ class Store:
             self._jobs = [j for j in self._jobs if j.get("id") != job_id]
         try:
             ok = appdb.delete_job(job_id)
-        except Exception:
+        except Exception as e:
+            # M19: memory-only delete — the row survives in app_jobs and the
+            # Rust engine may keep running the job.
+            self._log.warning("delete_job: appdb delete failed job=%s err=%s", job_id, e)
             ok = False
         # ok indicates DB removal; still consider memory removal for response truthiness
         return ok or (len(self._jobs) < before)
@@ -394,16 +447,22 @@ class Store:
                 pass
             return self.get_mapping(table_id)
 
-    def mapping_health(self, table_id: str, *, required_fields: List[str]) -> str:
+    def mapping_health(self, table_id: str, *, required_fields: List[str], schema_fields: Optional[List[Dict[str, Any]]] = None) -> str:
         m = self.get_mapping(table_id)
         rows = m.get("rows") or {}
-        if not rows:
+        # Identify derived fields (have formula) — they don't need device mappings
+        derived_keys: set = set()
+        if schema_fields:
+            derived_keys = {f.get("key") for f in schema_fields if f.get("formula")}
+        # Filter required_fields to only non-derived (device-mapped) fields
+        device_required = [f for f in required_fields if f not in derived_keys]
+        if not rows and not derived_keys:
             return "Unmapped"
-        # If no schema is defined (no required fields), treat any mapping as Mapped
-        if not required_fields:
+        # If no device fields required (all derived), treat as Mapped
+        if not device_required:
             return "Mapped"
         ok = 0
-        for f in required_fields:
+        for f in device_required:
             r = rows.get(f) or {}
             p = (r.get("protocol") or "").lower()
             if p == "opcua":
@@ -420,7 +479,7 @@ class Store:
                 pass
         if ok == 0:
             return "Unmapped"
-        if ok == len(required_fields):
+        if ok == len(device_required):
             return "Mapped"
         return "Partially Mapped"
 
@@ -796,6 +855,10 @@ class Store:
     def load_from_app_db(self) -> None:
         with self._mtx:
             appdb.init()
+            # Reset the mapping cache: a resync must not keep ghost mappings
+            # for tables that no longer exist in the App DB (every other cache
+            # below is reassigned wholesale; _mappings is rebuilt incrementally).
+            self._mappings = {}
             # Schemas
             self._schemas = appdb.load_schemas()
             # Targets + default
@@ -845,11 +908,12 @@ class Store:
                                 "rows": loaded.get("rows") or {},
                             }
                             hydrated += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    # M19: hydration is best-effort but must not be silent.
+                    self._log.warning("store.load: mapping hydration from user DB failed: %s", e)
                 self._log.info(f"store.load: tables={len(self._tables)} device_bound={bound} mappings_hydrated={hydrated}")
-            except Exception:
-                pass
+            except Exception as e:
+                self._log.warning("store.load: mapping fallback setup failed: %s", e)
             # Gateways
             self._gateways = []
             for g in appdb.load_gateways():

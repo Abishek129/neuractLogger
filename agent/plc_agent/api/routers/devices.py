@@ -65,7 +65,7 @@ def update_device(dev_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
     return {"success": True, "item": item}
 
 
-@router.delete("/{dev_id}")
+@router.delete("/{dev_id}", dependencies=[Depends(require_logger_write)])  # SEC-3/C6
 def delete_device(dev_id: str) -> Dict[str, Any]:
     ok = Store.instance().delete_device(dev_id)
     if not ok:

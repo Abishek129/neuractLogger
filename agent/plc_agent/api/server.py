@@ -96,10 +96,10 @@ def run(host: str = "127.0.0.1", port: int = 5175):
 
             return
         except ImportError as e:
-            print("??? Uvicorn or FastAPI not installed:", e)
+            print("Uvicorn or FastAPI not installed:", e)
         except Exception as e:
-            print("??? Error starting uvicorn:", e)
-            raise  # ??? Re-raise unless fallback is really wanted
+            print("Error starting uvicorn:", e)
+            raise
     httpd = HTTPServer((host, port), _Handler)
     try:
         httpd.serve_forever()
