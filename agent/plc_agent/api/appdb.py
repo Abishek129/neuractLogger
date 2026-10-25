@@ -188,6 +188,10 @@ def init() -> None:
         _ensure_column(c, "app_schema_fields", "desc_text", "TEXT")
         _ensure_column(c, "app_schema_fields", "formula", "TEXT")
         _ensure_column(c, "app_schema_fields", "eval_order", "INTEGER")
+        # Per-meter-model default Modbus address. The effective per-table value
+        # still lives in the target DB's device_mappings; this is the template
+        # the mapping grid pre-fills from.
+        _ensure_column(c, "app_schema_fields", "address", "TEXT")
         try:
             c.execute(
                 text("UPDATE app_schema_fields SET desc_text = 'desc' WHERE desc_text IS NULL")
@@ -265,6 +269,10 @@ def init() -> None:
         _ensure_column(c, "app_devices", "unit_id", "INTEGER")
         _ensure_column(c, "app_devices", "port", "INTEGER")
         _ensure_column(c, "app_devices", "gateway_id", "TEXT")
+        # Nominal (rated) voltage of the installation this device measures. Per DEVICE,
+        # not per schema: one meter model serves 415 V panels and 33 kV incomers alike,
+        # so voltage-deviation formulas cannot hardcode it.
+        _ensure_column(c, "app_devices", "nominal_voltage", "REAL")
         c.execute(
             text(
                 """
@@ -439,7 +447,7 @@ def load_schemas() -> List[Dict[str, Any]]:
         for r in rows:
             f = _fetchall(
                 c,
-                "SELECT key, type, unit, scale, desc_text AS \"desc\", formula, eval_order "
+                "SELECT key, type, unit, scale, desc_text AS \"desc\", formula, eval_order, address "
                 "FROM app_schema_fields WHERE schema_id=:schema_id ORDER BY key",
                 {"schema_id": r["id"]},
             )
@@ -459,7 +467,7 @@ def save_schema(schema: Dict[str, Any]) -> None:
                 text(
                     _upsert_sql(
                         "app_schema_fields",
-                        ["schema_id", "key", "type", "unit", "scale", "desc_text", "formula", "eval_order"],
+                        ["schema_id", "key", "type", "unit", "scale", "desc_text", "formula", "eval_order", "address"],
                         ["schema_id", "key"],
                     )
                 ),
@@ -472,6 +480,7 @@ def save_schema(schema: Dict[str, Any]) -> None:
                     "desc_text": fld.get("desc"),
                     "formula": fld.get("formula"),
                     "eval_order": fld.get("eval_order"),
+                    "address": fld.get("address"),
                 },
             )
 
@@ -974,7 +983,7 @@ def load_devices() -> List[Dict[str, Any]]:
     with _conn() as c:
         rs = _fetchall(
             c,
-            "SELECT id,name,protocol,params_json,status,latency_ms,last_error,auto_reconnect,unit_id,port,gateway_id FROM app_devices ORDER BY name",
+            "SELECT id,name,protocol,params_json,status,latency_ms,last_error,auto_reconnect,unit_id,port,gateway_id,nominal_voltage FROM app_devices ORDER BY name",
         )
         out: List[Dict[str, Any]] = []
         for r in rs:
@@ -995,6 +1004,7 @@ def load_devices() -> List[Dict[str, Any]]:
                     "unitId": r.get("unit_id"),
                     "port": r.get("port"),
                     "gatewayId": r.get("gateway_id"),
+                    "nominalVoltage": r.get("nominal_voltage"),
                 }
             )
         return out
@@ -1006,7 +1016,7 @@ def upsert_device(dev: Dict[str, Any]) -> Dict[str, Any]:
         if row:
             existing = _fetchone(
                 c,
-                "SELECT id,name,protocol,params_json,status,latency_ms,last_error,auto_reconnect,unit_id,port,gateway_id FROM app_devices WHERE id=:id",
+                "SELECT id,name,protocol,params_json,status,latency_ms,last_error,auto_reconnect,unit_id,port,gateway_id,nominal_voltage FROM app_devices WHERE id=:id",
                 {"id": row["id"]},
             )
             if existing:
@@ -1025,13 +1035,14 @@ def upsert_device(dev: Dict[str, Any]) -> Dict[str, Any]:
                     "unitId": existing.get("unit_id"),
                     "port": existing.get("port"),
                     "gatewayId": existing.get("gateway_id"),
+                    "nominalVoltage": existing.get("nominal_voltage"),
                 }
         params_blob = _params_dump(dev.get("params") or {})
         c.execute(
             text(
                 _upsert_sql(
                     "app_devices",
-                    ["id", "name", "protocol", "params_json", "status", "latency_ms", "last_error", "auto_reconnect", "unit_id", "port", "gateway_id"],
+                    ["id", "name", "protocol", "params_json", "status", "latency_ms", "last_error", "auto_reconnect", "unit_id", "port", "gateway_id", "nominal_voltage"],
                     ["id"],
                 )
             ),
@@ -1047,6 +1058,7 @@ def upsert_device(dev: Dict[str, Any]) -> Dict[str, Any]:
                 "unit_id": dev.get("unitId"),
                 "port": dev.get("port"),
                 "gateway_id": dev.get("gatewayId"),
+                "nominal_voltage": dev.get("nominalVoltage"),
             },
         )
         return dev
@@ -1175,7 +1187,7 @@ def delete_job(job_id: str) -> bool:
         return bool(res.rowcount and res.rowcount > 0)
 
 
-def update_device_metadata(dev_id: str, *, name: Optional[str] = None, auto_reconnect: Optional[bool] = None, unit_id: Optional[int] = None, port: Optional[int] = None, gateway_id: Optional[str] = None) -> None:
+def update_device_metadata(dev_id: str, *, name: Optional[str] = None, auto_reconnect: Optional[bool] = None, unit_id: Optional[int] = None, port: Optional[int] = None, gateway_id: Optional[str] = None, nominal_voltage: Optional[float] = None) -> None:
     fields: List[str] = []
     values: Dict[str, Any] = {"id": dev_id}
     if name is not None:
@@ -1193,6 +1205,9 @@ def update_device_metadata(dev_id: str, *, name: Optional[str] = None, auto_reco
     if gateway_id is not None:
         fields.append("gateway_id=:gateway_id")
         values["gateway_id"] = gateway_id
+    if nominal_voltage is not None:
+        fields.append("nominal_voltage=:nominal_voltage")
+        values["nominal_voltage"] = nominal_voltage
     if not fields:
         return
     with _conn() as c:

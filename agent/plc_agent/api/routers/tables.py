@@ -751,35 +751,172 @@ def _now_ist_iso() -> str:
 
 
 # ---------- DELETE /tables/{table_id} ----------
+def purge_table_storage(t: Dict[str, Any]) -> None:
+    """Remove a table's physical data table and ALL its mapping rows in the target DB.
+
+    Deleting a table must leave nothing behind. A leftover physical table reappears
+    in GET /tables as a phy_ orphan, and leftover device_mappings rows are silently
+    re-attached to any new table created with the same name, because mappings are
+    keyed by table NAME, not id. Runs regardless of catalog status: a table can hold
+    data while its catalog row says not_migrated. Raises on failure so the caller
+    can abort before removing the catalog row.
+    """
+    from sqlalchemy import inspect as _sa_inspect
+
+    engine = _engine_for_target(t.get("dbTargetId") or Store.instance().get_default_db_target())
+    ident = _physical_ident(engine, t.get("name"))
+    with engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS {_q_qualified(engine, ident)}"))
+        if _sa_inspect(engine).has_table("device_mappings", schema=NEURACT_SCHEMA):
+            conn.execute(
+                text(f"DELETE FROM {NEURACT_SCHEMA}.device_mappings WHERE table_name=:tn"),
+                {"tn": t.get("name")},
+            )
+
+
 @router.delete("/{table_id}", dependencies=[Depends(require_logger_write)])
-def delete_table(
-    table_id: str,
-    dropPhysical: bool = Query(False),
-) -> Dict[str, Any]:
+def delete_table(table_id: str) -> Dict[str, Any]:
+    """Delete a table completely: physical table, mapping rows, then the catalog row.
+
+    Always full removal, so re-creating a table with the same name starts fresh.
+    (The old dropPhysical flag defaulted to false and the UI never sent it, so every
+    delete left orphans; an unknown query param is simply ignored by FastAPI.)
+    """
     t = Store.instance().get_table(table_id)
+    orphan = False
     if not t:
-        raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
+        # Physically-discovered orphan: GET /tables lists a physical table with no
+        # catalog row as "phy_<name>". There is no catalog row to remove, so purging
+        # its storage is the whole delete.
+        if table_id.startswith("phy_"):
+            orphan = True
+            t = {
+                "id": table_id,
+                "name": table_id[4:],
+                "dbTargetId": Store.instance().get_default_db_target(),
+                "status": "migrated",
+            }
+        else:
+            raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
     # Safety: reject if table is in a running job
+    if _in_running_job(table_id):
+        raise HTTPException(status_code=409, detail="TABLE_HAS_RUNNING_JOBS")
+    try:
+        purge_table_storage(t)
+    except Exception as e:
+        log.warning("delete_table: storage purge failed table=%s err=%s", table_id, e)
+        # Abort BEFORE touching the catalog: catalog gone but data and mappings left
+        # behind is exactly the orphan this delete exists to prevent. Retryable.
+        raise HTTPException(status_code=500, detail=f"TABLE_PURGE_FAILED: {e}") from e
+    if not orphan:
+        Store.instance().delete_table(table_id)
+    return {
+        "success": True,
+        "message": "table_deleted",
+        "physicalDropped": True,
+        "mappingsDeleted": True,
+    }
+
+
+def _in_running_job(table_id: str) -> bool:
     for job in Store.instance().list_jobs():
         if table_id in (job.get("tables") or []) and (job.get("status") or "").lower() in ("running", "started"):
-            raise HTTPException(status_code=409, detail="TABLE_HAS_RUNNING_JOBS")
-    physical_dropped = False
-    if dropPhysical and (t.get("status") or "").lower() == "migrated":
-        try:
-            engine = _engine_for_target(t.get("dbTargetId"))
-            ident = _physical_ident(engine, t.get("name"))
-            with engine.begin() as conn:
-                conn.execute(text(f"DROP TABLE IF EXISTS {_q_qualified(engine, ident)}"))
-                # Clean mapping rows from user DB
-                conn.execute(text(f"DELETE FROM {NEURACT_SCHEMA}.device_mappings WHERE table_name=:tn"), {"tn": t.get("name")})
-            physical_dropped = True
-        except Exception as e:
-            log.warning("delete_table: physical drop failed table=%s err=%s", table_id, e)
-    Store.instance().delete_table(table_id)
-    return {"success": True, "message": "table_deleted", "physicalDropped": physical_dropped}
+            return True
+    return False
 
 
 # ---------- PATCH /tables/{table_id} ----------
+class TableRenameConflict(ValueError):
+    """Rename refused: the table is in a running job, or the new name is already in use."""
+
+
+def rename_table_storage(t: Dict[str, Any], new_name: str) -> Dict[str, Any]:
+    """Carry a table rename through the target DB in one transaction: the physical
+    table, its timestamp index, and every device_mappings row.
+
+    device_mappings is keyed by table NAME, and both the Rust engine and the mapping
+    loader look tables up by name, so a catalog-only rename strands the data table
+    and all mappings under the old name. Raises TableRenameConflict if the new name
+    is already used in the target DB.
+    """
+    from sqlalchemy import inspect as _sa_inspect
+
+    old_name = t.get("name")
+    engine = _engine_for_target(t.get("dbTargetId") or Store.instance().get_default_db_target())
+    old_ident = _physical_ident(engine, old_name)
+    new_ident = _physical_ident(engine, new_name)
+    insp = _sa_inspect(engine)
+    if insp.has_table(new_ident["name"], schema=new_ident["schema"]):
+        raise TableRenameConflict("TABLE_NAME_TAKEN")
+    has_data = insp.has_table(old_ident["name"], schema=old_ident["schema"])
+    has_mappings = insp.has_table("device_mappings", schema=NEURACT_SCHEMA)
+    moved = 0
+    with engine.begin() as conn:
+        if has_mappings and conn.execute(
+            text(f"SELECT COUNT(*) FROM {NEURACT_SCHEMA}.device_mappings WHERE table_name=:tn"),
+            {"tn": new_name},
+        ).scalar():
+            raise TableRenameConflict("TABLE_NAME_HAS_MAPPINGS")
+        if has_data:
+            conn.execute(text(
+                f"ALTER TABLE {_q_qualified(engine, old_ident)} RENAME TO {_q(engine, new_ident['name'])}"
+            ))
+            if _dialect_name(engine).startswith("postgres"):
+                # Keep _ensure_ts_index's naming. A stale idx_<old>_ts would make a future
+                # table reusing the old name silently skip its own index (IF NOT EXISTS).
+                old_idx = {"schema": old_ident["schema"], "name": f"idx_{old_ident['name']}_ts"}
+                new_idx = f"idx_{new_ident['name']}_ts"
+                try:
+                    with conn.begin_nested():
+                        conn.execute(text(
+                            f"ALTER INDEX IF EXISTS {_q_qualified(engine, old_idx)} RENAME TO {_q(engine, new_idx)}"
+                        ))
+                except Exception as e:
+                    # Cosmetic only; never fail the rename over the index name.
+                    log.warning("rename: index rename skipped %s -> %s err=%s", old_idx["name"], new_idx, e)
+        if has_mappings:
+            moved = conn.execute(
+                text(f"UPDATE {NEURACT_SCHEMA}.device_mappings SET table_name=:new WHERE table_name=:old"),
+                {"new": new_name, "old": old_name},
+            ).rowcount
+    return {"from": old_name, "to": new_name, "physicalRenamed": has_data, "mappingsMoved": moved}
+
+
+def update_table_and_storage(table_id: str, patch: Dict[str, Any]) -> tuple:
+    """Store.update_table, carrying a name change through the target DB first.
+
+    Returns (updated_table or None, rename summary or None). Shared by PATCH
+    /tables and the AI update_table tool so neither can do a catalog-only rename.
+    """
+    store = Store.instance()
+    t = store.get_table(table_id)
+    if not t:
+        return None, None
+    old_name = t.get("name")
+    new_name = patch.get("name")
+    if new_name is None or new_name == old_name:
+        return store.update_table(table_id, {k: v for k, v in patch.items() if k != "name"}), None
+    if not isinstance(new_name, str) or not _sql_safe(new_name):
+        raise ValueError("INVALID_NAME")
+    if _in_running_job(table_id):
+        # The engine reads the table name once at job start; renaming under it breaks writes.
+        raise TableRenameConflict("TABLE_HAS_RUNNING_JOBS")
+    if any(o.get("id") != table_id and o.get("name") == new_name for o in store.list_tables()):
+        raise TableRenameConflict("TABLE_NAME_TAKEN")
+    renamed = rename_table_storage(t, new_name)
+    try:
+        updated = store.update_table(table_id, patch)
+    except Exception:
+        # Put the target DB back so it never disagrees with the catalog row.
+        try:
+            rename_table_storage({**t, "name": new_name}, old_name)
+        except Exception as undo_err:
+            log.error("rename: catalog update failed and undo failed table=%s %s->%s err=%s",
+                      table_id, old_name, new_name, undo_err)
+        raise
+    return updated, renamed
+
+
 @router.patch("/{table_id}", dependencies=[Depends(require_logger_write)])
 def patch_table(table_id: str, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     t = Store.instance().get_table(table_id)
@@ -791,8 +928,6 @@ def patch_table(table_id: str, payload: Dict[str, Any] = Body(...)) -> Dict[str,
         new_name = (payload["name"] or "").strip()
         if not new_name or not _sql_safe(new_name):
             raise HTTPException(status_code=400, detail="INVALID_NAME")
-        if (t.get("status") or "").lower() == "migrated":
-            warnings.append("Table is migrated; name change requires re-migration")
         patch["name"] = new_name
     if "schemaId" in payload:
         sid = payload["schemaId"]
@@ -809,8 +944,16 @@ def patch_table(table_id: str, payload: Dict[str, Any] = Body(...)) -> Dict[str,
             warnings.append("DB target changed; re-migration needed")
     if not patch:
         raise HTTPException(status_code=400, detail="NO_FIELDS_TO_UPDATE")
-    updated = Store.instance().update_table(table_id, patch)
+    try:
+        updated, renamed = update_table_and_storage(table_id, patch)
+    except TableRenameConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except Exception as e:
+        log.warning("patch_table: update failed table=%s err=%s", table_id, e)
+        raise HTTPException(status_code=500, detail=f"TABLE_UPDATE_FAILED: {e}") from e
     resp: Dict[str, Any] = {"success": True, "item": updated}
+    if renamed:
+        resp["renamed"] = renamed
     if warnings:
         resp["warnings"] = warnings
     return resp

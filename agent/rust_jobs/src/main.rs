@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use base64::Engine;
 use byteorder::{BigEndian, ByteOrder};
-use chrono::{Utc, Local};
+use chrono::{Utc, Local, FixedOffset};
 use log::{error, info, warn, LevelFilter};
 use opcua::client::prelude::*;
 use opcua::sync::RwLock;
@@ -278,6 +278,10 @@ struct Device {
     unit_id: Option<i32>,
     port: Option<i32>,
     gateway_id: Option<String>,
+    /// Rated line-to-line voltage of the installation this device measures.
+    /// Per device, because one meter model serves 415 V panels and 33 kV
+    /// incomers alike; exposed to formulas as dev_nominal_voltage.
+    nominal_voltage: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -313,45 +317,66 @@ enum RegisterType {
 ///   "00001" → (Coil, 0)             — 0xxxx prefix, 1-based
 ///   "0"     → (HoldingRegister, 0)   — raw register, no prefix
 ///   "100"   → (HoldingRegister, 100) — raw register, no prefix
-fn parse_modbus_address(raw: &str) -> Option<(RegisterType, u16)> {
+fn parse_modbus_address(raw: &str) -> Option<(RegisterType, u16, Option<u8>)> {
     let s = raw.trim();
     if s.is_empty() {
         return None;
     }
-    let num: u32 = s.parse().ok()?;
+
+    // Optional "<reg>,<bit>" suffix → extract a single bit (0-15) from the word,
+    // e.g. "40101,0" (holding reg bit) or "D200,3" (Delta D-register bit).
+    let (reg_part, bit) = match s.split_once(',') {
+        Some((r, b)) => {
+            let bit = b.trim().parse::<u8>().ok().filter(|&n| n < 16)?;
+            (r.trim(), Some(bit))
+        }
+        None => (s, None),
+    };
+
+    // Delta D-register: "D100" → holding register 0x1000 + N (Delta DVP Modbus convention).
+    if let Some(rest) = reg_part.strip_prefix(|c| c == 'D' || c == 'd') {
+        let n: u32 = rest.parse().ok()?;
+        let addr = 0x1000u32 + n;
+        if addr > 65535 {
+            return None;
+        }
+        return Some((RegisterType::HoldingRegister, addr as u16, bit));
+    }
+
+    let num: u32 = reg_part.parse().ok()?;
 
     // 5-digit industry-standard addresses (40001-49999, 30001-39999, etc.)
     if num >= 40001 && num <= 49999 {
-        return Some((RegisterType::HoldingRegister, (num - 40001) as u16));
+        return Some((RegisterType::HoldingRegister, (num - 40001) as u16, bit));
     }
     if num >= 30001 && num <= 39999 {
-        return Some((RegisterType::InputRegister, (num - 30001) as u16));
+        return Some((RegisterType::InputRegister, (num - 30001) as u16, bit));
     }
     if num >= 10001 && num <= 19999 {
-        return Some((RegisterType::DiscreteInput, (num - 10001) as u16));
+        return Some((RegisterType::DiscreteInput, (num - 10001) as u16, bit));
     }
-    if num >= 1 && num <= 9999 && s.len() == 5 {
+    if num >= 1 && num <= 9999 && reg_part.len() == 5 {
         // 5-digit with leading zero: "00001" → coil 0
-        return Some((RegisterType::Coil, (num - 1) as u16));
+        return Some((RegisterType::Coil, (num - 1) as u16, bit));
     }
 
     // 6-digit extended addresses (400001-465535, 300001-365535)
     if num >= 400001 && num <= 465535 {
-        return Some((RegisterType::HoldingRegister, (num - 400001) as u16));
+        return Some((RegisterType::HoldingRegister, (num - 400001) as u16, bit));
     }
     if num >= 300001 && num <= 365535 {
-        return Some((RegisterType::InputRegister, (num - 300001) as u16));
+        return Some((RegisterType::InputRegister, (num - 300001) as u16, bit));
     }
     if num >= 100001 && num <= 165535 {
-        return Some((RegisterType::DiscreteInput, (num - 100001) as u16));
+        return Some((RegisterType::DiscreteInput, (num - 100001) as u16, bit));
     }
-    if num >= 1 && num <= 65535 && s.len() == 6 {
-        return Some((RegisterType::Coil, (num - 1) as u16));
+    if num >= 1 && num <= 65535 && reg_part.len() == 6 {
+        return Some((RegisterType::Coil, (num - 1) as u16, bit));
     }
 
     // Raw numeric — treat as holding register (backwards compatible)
     if num <= 65535 {
-        return Some((RegisterType::HoldingRegister, num as u16));
+        return Some((RegisterType::HoldingRegister, num as u16, bit));
     }
 
     None
@@ -365,6 +390,9 @@ struct BucketField {
     reg_count: u16,
     encoding: String,
     scale: Option<f64>,
+    /// For "<reg>,<bit>" addresses: extract this single bit (0-15) from the word
+    /// (Delta/SCADA breaker-status feedbacks packed into a holding register).
+    bit: Option<u8>,
 }
 
 /// A group of fields whose registers fall within the same 125-register section.
@@ -1069,7 +1097,8 @@ async fn run_job(
                 // H-DBC-1: capture the row timestamp once, right after the
                 // device reads complete, and carry it into the write path —
                 // never stamp rows at write-execute time.
-                let cycle_ts = Utc::now().to_rfc3339();
+                // Stamp rows in IST (+05:30) per deployment preference (column name stays timestamp_utc).
+                let cycle_ts = Utc::now().with_timezone(&FixedOffset::east_opt(19800).unwrap()).to_rfc3339();
 
                 let mut pending_writes: Vec<(&TableRuntime, FieldMap)> = Vec::new();
                 for group in all_results {
@@ -1095,7 +1124,7 @@ async fn run_job(
 
                 // Phase 1.5: Evaluate derived fields for each table
                 for (table_rt, values) in pending_writes.iter_mut() {
-                    eval_derived_fields(&job.id, &table_rt.table.id, &table_rt.derived_fields, values);
+                    eval_derived_fields(&job.id, &table_rt.table.id, &table_rt.derived_fields, values, table_rt.device.nominal_voltage);
                 }
 
                 // Phase 2: Write all tables — fire and continue (#4: overlap with next read)
@@ -1250,10 +1279,10 @@ async fn run_job(
                         }
                     };
                     // H-DBC-1: stamp the row at read time, not at write time
-                    let read_ts = Utc::now().to_rfc3339();
+                    let read_ts = Utc::now().with_timezone(&FixedOffset::east_opt(19800).unwrap()).to_rfc3339();
                     // Evaluate derived fields before trigger evaluation
                     let mut values = values;
-                    eval_derived_fields(&job.id, &table_id, &table_rt.derived_fields, &mut values);
+                    eval_derived_fields(&job.id, &table_id, &table_rt.derived_fields, &mut values, table_rt.device.nominal_voltage);
                     let fire_info = eval_triggers(&triggers, table_id.as_str(), &values, &mut last_values);
                     let should_fire = fire_info.is_some();
                     info!("Job {} [TRIG_EVAL] table={} fired={}", job.id, table_id, should_fire);
@@ -1495,6 +1524,10 @@ async fn run_job(
             }
         }
     }
+    // Release the gateway's Modbus session before the thread goes away. Without
+    // this the socket stays open for the life of the process and nothing else can
+    // talk to the meter (single-session gateways).
+    modbus_manager.disconnect_all().await;
     info!("job {} stopped", job.id);
     Ok(())
 }
@@ -1509,7 +1542,7 @@ fn build_modbus_buckets(mapping: &[MappingRow]) -> Vec<RegisterBucket> {
         if !row.protocol.eq_ignore_ascii_case("modbus") {
             continue;
         }
-        let (reg_type, address) = match parse_modbus_address(&row.address) {
+        let (reg_type, address, bit) = match parse_modbus_address(&row.address) {
             Some(v) => v,
             None => continue,
         };
@@ -1520,7 +1553,9 @@ fn build_modbus_buckets(mapping: &[MappingRow]) -> Vec<RegisterBucket> {
         } else {
             "float32".to_string()
         };
-        let (reg_count, _) = modbus_encoding_info(&encoding);
+        // A "<reg>,<bit>" field reads exactly one register and masks the bit;
+        // otherwise the register count comes from the encoding width.
+        let reg_count = if bit.is_some() { 1 } else { modbus_encoding_info(&encoding).0 };
 
         let bucket_idx = address / 125;
         bucket_map.entry((reg_type, bucket_idx)).or_default().push(BucketField {
@@ -1529,13 +1564,19 @@ fn build_modbus_buckets(mapping: &[MappingRow]) -> Vec<RegisterBucket> {
             reg_count,
             encoding,
             scale: row.scale,
+            bit,
         });
     }
 
     let mut buckets: Vec<RegisterBucket> = Vec::new();
     for ((reg_type, bucket_idx), fields) in bucket_map {
-        let start_addr = bucket_idx * 125;
-        // read_count = distance from bucket start to the end of the last field, capped at 125
+        // FIX 1 (bucket): start the bulk read at the FIRST mapped register, not the 125-aligned
+        // boundary. Meters whose registers begin above the boundary (e.g. Mitsubishi EMMS796,
+        // first reg 768 -> boundary 750) otherwise get IllegalDataAddress because the read would
+        // span non-existent registers 750..767. min..max keeps the request inside the real range;
+        // bucket_idx still groups fields into <=125-register windows.
+        let start_addr = fields.iter().map(|f| f.address).min().unwrap_or(bucket_idx * 125);
+        // read_count = first mapped register .. end of the last field, capped at 125
         let max_end = fields.iter()
             .map(|f| f.address + f.reg_count)
             .max()
@@ -1857,7 +1898,7 @@ fn sort_derived_fields(fields: &mut [DerivedField]) {
 /// — or an eval error — produces SQL NULL for that field, is NOT fed into the
 /// meval context (so downstream formulas referencing it also fail to NULL),
 /// and is surfaced via a rate-limited warn + error-CSV row. Never silent.
-fn eval_derived_fields(job_id: &str, table_id: &str, derived: &[DerivedField], values: &mut FieldMap) {
+fn eval_derived_fields(job_id: &str, table_id: &str, derived: &[DerivedField], values: &mut FieldMap, nominal_voltage: Option<f64>) {
     if derived.is_empty() {
         return;
     }
@@ -1867,6 +1908,15 @@ fn eval_derived_fields(job_id: &str, table_id: &str, derived: &[DerivedField], v
         if let Some(f) = v.as_f64() {
             ctx.var(k.clone(), f);
         }
+    }
+    // Device-level constants. Nominal voltage is a property of the installation,
+    // not of the meter model, so it cannot live in the schema formula. Both the
+    // line-to-line rating and its line-to-neutral equivalent are exposed; a device
+    // with no rating set simply leaves them undefined, and any formula using them
+    // evaluates to NULL (loudly, via the eval-error path below) instead of lying.
+    if let Some(nv) = nominal_voltage.filter(|v| v.is_finite() && *v > 0.0) {
+        ctx.var("dev_nominal_voltage".to_string(), nv);
+        ctx.var("dev_nominal_voltage_ln".to_string(), nv / 3f64.sqrt());
     }
     // Single-pass evaluation — derived fields are pre-sorted by eval_order
     for field in derived {
@@ -2408,7 +2458,7 @@ async fn load_target(client: &PgClient, target_id: &str) -> Result<Option<DbTarg
 async fn load_device(client: &PgClient, device_id: &str) -> Result<Option<Device>> {
     let rows = client
         .query(
-            "SELECT id,protocol,params_json,unit_id,port,gateway_id FROM app_devices WHERE id=$1",
+            "SELECT id,protocol,params_json,unit_id,port,gateway_id,nominal_voltage FROM app_devices WHERE id=$1",
             &[&device_id],
         )
         .await?;
@@ -2428,6 +2478,13 @@ async fn load_device(client: &PgClient, device_id: &str) -> Result<Option<Device
         unit_id: r.try_get("unit_id").ok().flatten(),
         port: r.try_get("port").ok().flatten(),
         gateway_id: r.try_get("gateway_id").ok().flatten(),
+        // Stored as REAL (float4); accept float8 too in case the column type changes.
+        nominal_voltage: r
+            .try_get::<_, Option<f32>>("nominal_voltage")
+            .ok()
+            .flatten()
+            .map(|v| v as f64)
+            .or_else(|| r.try_get::<_, Option<f64>>("nominal_voltage").ok().flatten()),
     }))
 }
 
@@ -2605,6 +2662,30 @@ impl ModbusManager {
         let mut map = self.contexts.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let max_idle = self.max_idle;
         map.retain(|_, (_, last_used)| last_used.elapsed() < max_idle);
+    }
+
+    /// Explicitly close every cached connection.
+    ///
+    /// Dropping the map is NOT enough: the TCP socket stays ESTABLISHED after the
+    /// job thread exits. Most Modbus gateways permit a single concurrent session,
+    /// so a leaked socket locks out dry-run, mapping validation and any external
+    /// tool until the whole engine is restarted. Called on the job stop path.
+    async fn disconnect_all(&self) {
+        // Drain under the lock, then await outside it — a std Mutex guard cannot
+        // be held across an await point.
+        let drained: Vec<(String, tokio_modbus::client::Context)> = {
+            let mut map = self
+                .contexts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            map.drain().map(|(k, (ctx, _))| (k, ctx)).collect()
+        };
+        for (key, mut ctx) in drained {
+            // tokio-modbus signals a successful disconnect as an Err (the peer
+            // closes the connection), so the result is deliberately ignored.
+            let _ = ctx.disconnect().await;
+            info!("modbus connection closed {}", key);
+        }
     }
 }
 
@@ -2879,6 +2960,26 @@ fn resolve_modbus_unit_id(device: &Device) -> u8 {
     device.unit_id.unwrap_or(1) as u8
 }
 
+/// Open a fresh Modbus/TCP connection with a bounded connect timeout.
+/// Used by the per-bucket read retry: some gateways (e.g. flaky Moxa/NPort
+/// units) reset the TCP session intermittently, so on a transport error we
+/// reconnect and retry rather than skipping the meter for the whole cycle.
+/// The connect is time-boxed so a "reset-then-refuse" gateway can't hang the job.
+async fn modbus_reconnect(host: &str, port: u16, unit_id: u8) -> Result<tokio_modbus::client::Context> {
+    let socket_addr = format!("{}:{}", host, port);
+    let addr: std::net::SocketAddr = socket_addr
+        .parse()
+        .map_err(|e| anyhow!("invalid modbus address {}: {}", socket_addr, e))?;
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        tokio_modbus::client::tcp::connect_slave(addr, Slave(unit_id)),
+    ).await {
+        Ok(Ok(c)) => Ok(c),
+        Ok(Err(e)) => Err(anyhow!("MODBUS_RECONNECT_FAILED {}:{} err={}", host, port, e)),
+        Err(_) => Err(anyhow!("MODBUS_RECONNECT_TIMEOUT {}:{}", host, port)),
+    }
+}
+
 // --- Modbus read implementation ---
 
 async fn read_modbus_values(
@@ -2937,69 +3038,105 @@ async fn read_modbus_values(
         let t_bucket = Instant::now();
         match bucket.reg_type {
             RegisterType::HoldingRegister | RegisterType::InputRegister => {
-                let read_result = match bucket.reg_type {
-                    RegisterType::HoldingRegister => ctx.read_holding_registers(bucket.start_addr, bucket.read_count).await,
-                    _ => ctx.read_input_registers(bucket.start_addr, bucket.read_count).await,
-                };
-                match read_result {
-                    Ok(Ok(regs)) => {
-                        info!(
-                            "Job {} [READ_MAPPING] [MODBUS_BUCKET] start={} count={} got={} elapsed_ms={:.2}",
-                            job_id, bucket.start_addr, bucket.read_count, regs.len(),
-                            t_bucket.elapsed().as_secs_f64() * 1000.0
-                        );
-                        for field in &bucket.fields {
-                            let offset = (field.address - bucket.start_addr) as usize;
-                            let end = offset + field.reg_count as usize;
-                            if end > regs.len() {
-                                warn!(
-                                    "modbus bucket field beyond read range field={} addr={} end={} regs_len={}",
-                                    field.field_key, field.address, end, regs.len()
-                                );
-                                continue;
+                // Per-read timeout + bounded retry on transient transport resets.
+                //  - Timeout (meter silent = down)      -> skip meter, NO retry (a
+                //    genuinely-dead unit must not cost 3x the timeout every cycle;
+                //    the cycle awaits ALL reads, so a hung meter can't be retried).
+                //  - Modbus exception (device said "no") -> skip bucket, keep connection.
+                //  - Connection reset / broken pipe      -> reconnect + retry: some
+                //    gateways drop the TCP session intermittently (flaky Moxa/NPort),
+                //    so a single-shot read would fail forever. Only THIS branch retries.
+                const MODBUS_READ_RETRIES: u32 = 2; // up to 3 total attempts
+                let mut attempt: u32 = 0;
+                let regs_opt: Option<Vec<u16>> = loop {
+                    let read_result = match tokio::time::timeout(
+                        std::time::Duration::from_secs(3),
+                        async {
+                            match bucket.reg_type {
+                                RegisterType::HoldingRegister => ctx.read_holding_registers(bucket.start_addr, bucket.read_count).await,
+                                _ => ctx.read_input_registers(bucket.start_addr, bucket.read_count).await,
                             }
-                            let field_regs = &regs[offset..end];
-                            if let Some(mut val) = decode_registers(field_regs, &field.encoding, byte_order) {
-                                // Post-decode coercion
-                                if field.encoding == "bool16" {
-                                    val = if val != 0.0 { 1.0 } else { 0.0 };
-                                }
-                                // Apply scale (computed in f64)
-                                if let Some(scale) = field.scale {
-                                    val *= scale;
-                                }
-                                // H-RUST-2: float32-encoded values keep f32 precision
-                                // so serialization round-trips ("229.4", not
-                                // "229.39999389648438"). Scale math stays in f64,
-                                // then rounds to f32 — matching the REAL columns.
-                                let is_f32_origin = modbus_encoding_info(&field.encoding).1 == "f32";
-                                let fv = if field.encoding == "uint16_enum" {
-                                    FieldValue::Int(val as i64)
-                                } else if field.encoding == "bool16" {
-                                    FieldValue::Bool(val != 0.0)
-                                } else if is_f32_origin {
-                                    FieldValue::Float32(val as f32)
-                                } else {
-                                    FieldValue::Float(val)
-                                };
-                                values.insert(field.field_key.clone(), fv);
+                        },
+                    ).await {
+                        Ok(r) => r,
+                        Err(_) => {
+                            warn!("modbus bucket read timeout start={} count={} unit={} (meter not responding)",
+                                  bucket.start_addr, bucket.read_count, unit_id);
+                            modbus_manager.drop_context(&key);
+                            return Err(anyhow!("modbus read timeout unit={}", unit_id));
+                        }
+                    };
+                    match read_result {
+                        Ok(Ok(regs)) => break Some(regs),
+                        Ok(Err(exception)) => {
+                            warn!("modbus bucket exception start={} count={} unit={} err={:?}",
+                                  bucket.start_addr, bucket.read_count, unit_id, exception);
+                            break None;
+                        }
+                        Err(e) if attempt < MODBUS_READ_RETRIES => {
+                            attempt += 1;
+                            warn!("modbus bucket read reset start={} count={} unit={} attempt={}/{} err={} — reconnecting",
+                                  bucket.start_addr, bucket.read_count, unit_id, attempt, MODBUS_READ_RETRIES, e);
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            match modbus_reconnect(&host, port, unit_id).await {
+                                Ok(c) => { ctx = c; ctx.set_slave(Slave(unit_id)); }
+                                Err(re) => { modbus_manager.drop_context(&key); return Err(re); }
                             }
                         }
+                        Err(e) => {
+                            warn!("modbus bucket read error start={} count={} unit={} err={} (retries exhausted)",
+                                  bucket.start_addr, bucket.read_count, unit_id, e);
+                            modbus_manager.drop_context(&key);
+                            return Err(anyhow!("modbus read failed: {}", e));
+                        }
                     }
-                    Ok(Err(exception)) => {
-                        warn!(
-                            "modbus bucket exception start={} count={} unit={} err={:?}",
-                            bucket.start_addr, bucket.read_count, unit_id, exception
-                        );
-                    }
-                    Err(e) => {
-                        warn!(
-                            "modbus bucket read error start={} count={} unit={} err={}",
-                            bucket.start_addr, bucket.read_count, unit_id, e
-                        );
-                        // On connection error, don't cache the broken context
-                        modbus_manager.drop_context(&key);
-                        return Err(anyhow!("modbus read failed: {}", e));
+                };
+                if let Some(regs) = regs_opt {
+                    info!(
+                        "Job {} [READ_MAPPING] [MODBUS_BUCKET] start={} count={} got={} elapsed_ms={:.2}",
+                        job_id, bucket.start_addr, bucket.read_count, regs.len(),
+                        t_bucket.elapsed().as_secs_f64() * 1000.0
+                    );
+                    for field in &bucket.fields {
+                        let offset = (field.address - bucket.start_addr) as usize;
+                        let end = offset + field.reg_count as usize;
+                        if end > regs.len() {
+                            warn!(
+                                "modbus bucket field beyond read range field={} addr={} end={} regs_len={}",
+                                field.field_key, field.address, end, regs.len()
+                            );
+                            continue;
+                        }
+                        let field_regs = &regs[offset..end];
+                        // "<reg>,<bit>" → extract a single bit from the word as 0/1 (breaker/relay status).
+                        if let Some(b) = field.bit {
+                            let on = (field_regs[0] >> b) & 1 == 1;
+                            values.insert(field.field_key.clone(), FieldValue::Bool(on));
+                        } else if let Some(mut val) = decode_registers(field_regs, &field.encoding, byte_order) {
+                            // Post-decode coercion
+                            if field.encoding == "bool16" {
+                                val = if val != 0.0 { 1.0 } else { 0.0 };
+                            }
+                            // Apply scale (computed in f64)
+                            if let Some(scale) = field.scale {
+                                val *= scale;
+                            }
+                            // H-RUST-2: float32-encoded values keep f32 precision
+                            // so serialization round-trips ("229.4", not
+                            // "229.39999389648438"). Scale math stays in f64,
+                            // then rounds to f32 — matching the REAL columns.
+                            let is_f32_origin = modbus_encoding_info(&field.encoding).1 == "f32";
+                            let fv = if field.encoding == "uint16_enum" {
+                                FieldValue::Int(val as i64)
+                            } else if field.encoding == "bool16" {
+                                FieldValue::Bool(val != 0.0)
+                            } else if is_f32_origin {
+                                FieldValue::Float32(val as f32)
+                            } else {
+                                FieldValue::Float(val)
+                            };
+                            values.insert(field.field_key.clone(), fv);
+                        }
                     }
                 }
             }
@@ -3378,42 +3515,42 @@ mod tests {
 
     #[test]
     fn modbus_addr_holding_5digit() {
-        assert_eq!(parse_modbus_address("40001"), Some((RegisterType::HoldingRegister, 0)));
-        assert_eq!(parse_modbus_address("49999"), Some((RegisterType::HoldingRegister, 9998)));
+        assert_eq!(parse_modbus_address("40001"), Some((RegisterType::HoldingRegister, 0, None)));
+        assert_eq!(parse_modbus_address("49999"), Some((RegisterType::HoldingRegister, 9998, None)));
     }
 
     #[test]
     fn modbus_addr_input_5digit() {
-        assert_eq!(parse_modbus_address("30001"), Some((RegisterType::InputRegister, 0)));
-        assert_eq!(parse_modbus_address("30100"), Some((RegisterType::InputRegister, 99)));
+        assert_eq!(parse_modbus_address("30001"), Some((RegisterType::InputRegister, 0, None)));
+        assert_eq!(parse_modbus_address("30100"), Some((RegisterType::InputRegister, 99, None)));
     }
 
     #[test]
     fn modbus_addr_discrete_5digit() {
-        assert_eq!(parse_modbus_address("10001"), Some((RegisterType::DiscreteInput, 0)));
-        assert_eq!(parse_modbus_address("19999"), Some((RegisterType::DiscreteInput, 9998)));
+        assert_eq!(parse_modbus_address("10001"), Some((RegisterType::DiscreteInput, 0, None)));
+        assert_eq!(parse_modbus_address("19999"), Some((RegisterType::DiscreteInput, 9998, None)));
     }
 
     #[test]
     fn modbus_addr_coil_5digit_leading_zero() {
-        assert_eq!(parse_modbus_address("00001"), Some((RegisterType::Coil, 0)));
-        assert_eq!(parse_modbus_address("00010"), Some((RegisterType::Coil, 9)));
+        assert_eq!(parse_modbus_address("00001"), Some((RegisterType::Coil, 0, None)));
+        assert_eq!(parse_modbus_address("00010"), Some((RegisterType::Coil, 9, None)));
     }
 
     #[test]
     fn modbus_addr_extended_6digit() {
-        assert_eq!(parse_modbus_address("400001"), Some((RegisterType::HoldingRegister, 0)));
-        assert_eq!(parse_modbus_address("465535"), Some((RegisterType::HoldingRegister, 65534)));
-        assert_eq!(parse_modbus_address("300001"), Some((RegisterType::InputRegister, 0)));
-        assert_eq!(parse_modbus_address("100001"), Some((RegisterType::DiscreteInput, 0)));
-        assert_eq!(parse_modbus_address("000001"), Some((RegisterType::Coil, 0)));
+        assert_eq!(parse_modbus_address("400001"), Some((RegisterType::HoldingRegister, 0, None)));
+        assert_eq!(parse_modbus_address("465535"), Some((RegisterType::HoldingRegister, 65534, None)));
+        assert_eq!(parse_modbus_address("300001"), Some((RegisterType::InputRegister, 0, None)));
+        assert_eq!(parse_modbus_address("100001"), Some((RegisterType::DiscreteInput, 0, None)));
+        assert_eq!(parse_modbus_address("000001"), Some((RegisterType::Coil, 0, None)));
     }
 
     #[test]
     fn modbus_addr_raw_numeric_is_holding() {
-        assert_eq!(parse_modbus_address("0"), Some((RegisterType::HoldingRegister, 0)));
-        assert_eq!(parse_modbus_address("100"), Some((RegisterType::HoldingRegister, 100)));
-        assert_eq!(parse_modbus_address("65535"), Some((RegisterType::HoldingRegister, 65535)));
+        assert_eq!(parse_modbus_address("0"), Some((RegisterType::HoldingRegister, 0, None)));
+        assert_eq!(parse_modbus_address("100"), Some((RegisterType::HoldingRegister, 100, None)));
+        assert_eq!(parse_modbus_address("65535"), Some((RegisterType::HoldingRegister, 65535, None)));
     }
 
     #[test]
@@ -3428,7 +3565,25 @@ mod tests {
 
     #[test]
     fn modbus_addr_whitespace_trimmed() {
-        assert_eq!(parse_modbus_address(" 40001 "), Some((RegisterType::HoldingRegister, 0)));
+        assert_eq!(parse_modbus_address(" 40001 "), Some((RegisterType::HoldingRegister, 0, None)));
+    }
+
+    #[test]
+    fn modbus_addr_bit_suffix() {
+        // "<reg>,<bit>" → holding/extended register + a single bit 0-15
+        assert_eq!(parse_modbus_address("40101,0"), Some((RegisterType::HoldingRegister, 100, Some(0))));
+        assert_eq!(parse_modbus_address("40101,15"), Some((RegisterType::HoldingRegister, 100, Some(15))));
+        assert_eq!(parse_modbus_address("100,3"), Some((RegisterType::HoldingRegister, 100, Some(3))));
+        assert_eq!(parse_modbus_address("40101,16"), None); // bit out of range (0-15)
+        assert_eq!(parse_modbus_address("40101,x"), None); // malformed bit
+    }
+
+    #[test]
+    fn modbus_addr_delta_d_register() {
+        // Delta D-register: D_N → holding 0x1000 + N, with optional bit
+        assert_eq!(parse_modbus_address("D0"), Some((RegisterType::HoldingRegister, 0x1000, None)));
+        assert_eq!(parse_modbus_address("D100"), Some((RegisterType::HoldingRegister, 0x1000 + 100, None)));
+        assert_eq!(parse_modbus_address("D200,3"), Some((RegisterType::HoldingRegister, 0x1000 + 200, Some(3))));
     }
 
     // --- derived-field evaluation: non-finite -> NULL-marker, chains ---
@@ -3451,7 +3606,7 @@ mod tests {
         values.insert("a".into(), FieldValue::Float(3.0));
         values.insert("b".into(), FieldValue::Float(4.0));
         let dfs = vec![derived("c", "sqrt(a^2 + b^2)", 0)];
-        eval_derived_fields("tjob", "ttab", &dfs, &mut values);
+        eval_derived_fields("tjob", "ttab", &dfs, &mut values, None);
         match values.get("c") {
             Some(FieldValue::Float(v)) => assert!((v - 5.0).abs() < 1e-12),
             other => panic!("expected Float(5.0), got {:?}", other),
@@ -3459,11 +3614,64 @@ mod tests {
     }
 
     #[test]
+    fn derived_eval_uses_device_nominal_voltage() {
+        // 415 V nominal, measuring 420 V L-L -> +1.2% deviation.
+        let mut values: FieldMap = HashMap::new();
+        values.insert("voltage_avg".into(), FieldValue::Float(420.0));
+        let dfs = vec![derived(
+            "kpi_voltage_deviation_pct",
+            "(voltage_avg - dev_nominal_voltage) / dev_nominal_voltage * 100",
+            0,
+        )];
+        eval_derived_fields("tjob", "ttab_nom", &dfs, &mut values, Some(415.0));
+        match values.get("kpi_voltage_deviation_pct") {
+            Some(FieldValue::Float(v)) => assert!((v - 100.0 * 5.0 / 415.0).abs() < 1e-9, "got {}", v),
+            other => panic!("expected a deviation, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn derived_eval_nominal_ln_is_ll_over_sqrt3() {
+        let mut values: FieldMap = HashMap::new();
+        values.insert("voltage_r_n".into(), FieldValue::Float(239.6));
+        let dfs = vec![derived("ln_ref", "dev_nominal_voltage_ln", 0)];
+        eval_derived_fields("tjob", "ttab_ln", &dfs, &mut values, Some(415.0));
+        match values.get("ln_ref") {
+            Some(FieldValue::Float(v)) => assert!((v - 415.0 / 3f64.sqrt()).abs() < 1e-9, "got {}", v),
+            other => panic!("expected the L-N nominal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn derived_eval_without_nominal_voltage_is_null_not_wrong() {
+        // A device with no rating must NOT silently produce a number.
+        let mut values: FieldMap = HashMap::new();
+        values.insert("voltage_avg".into(), FieldValue::Float(420.0));
+        let dfs = vec![derived(
+            "kpi_voltage_deviation_pct",
+            "(voltage_avg - dev_nominal_voltage) / dev_nominal_voltage * 100",
+            0,
+        )];
+        eval_derived_fields("tjob", "ttab_nonom", &dfs, &mut values, None);
+        assert!(is_null_marker(values.get("kpi_voltage_deviation_pct")));
+    }
+
+    #[test]
+    fn derived_eval_rejects_zero_nominal_voltage() {
+        // 0 would divide by zero and yield inf; it must be treated as "unset".
+        let mut values: FieldMap = HashMap::new();
+        values.insert("voltage_avg".into(), FieldValue::Float(420.0));
+        let dfs = vec![derived("d", "(voltage_avg - dev_nominal_voltage) / dev_nominal_voltage * 100", 0)];
+        eval_derived_fields("tjob", "ttab_zero", &dfs, &mut values, Some(0.0));
+        assert!(is_null_marker(values.get("d")));
+    }
+
+    #[test]
     fn derived_eval_error_becomes_null_marker() {
         let mut values: FieldMap = HashMap::new();
         values.insert("a".into(), FieldValue::Float(1.0));
         let dfs = vec![derived("bad", "a + missing_var", 0)];
-        eval_derived_fields("tjob", "ttab_err", &dfs, &mut values);
+        eval_derived_fields("tjob", "ttab_err", &dfs, &mut values, None);
         assert!(is_null_marker(values.get("bad")));
         assert_eq!(values.get("bad").unwrap().to_sql_literal(), "NULL");
     }
@@ -3474,7 +3682,7 @@ mod tests {
         let mut values: FieldMap = HashMap::new();
         values.insert("a".into(), FieldValue::Float(1.0));
         let dfs = vec![derived("inf_field", "a / 0", 0)];
-        eval_derived_fields("tjob", "ttab_inf", &dfs, &mut values);
+        eval_derived_fields("tjob", "ttab_inf", &dfs, &mut values, None);
         assert!(is_null_marker(values.get("inf_field")));
         assert_eq!(values.get("inf_field").unwrap().to_sql_literal(), "NULL");
     }
@@ -3484,7 +3692,7 @@ mod tests {
         let mut values: FieldMap = HashMap::new();
         values.insert("a".into(), FieldValue::Float(0.0));
         let dfs = vec![derived("nan_field", "a / 0", 0)]; // 0/0 = NaN
-        eval_derived_fields("tjob", "ttab_nan", &dfs, &mut values);
+        eval_derived_fields("tjob", "ttab_nan", &dfs, &mut values, None);
         assert!(is_null_marker(values.get("nan_field")));
     }
 
@@ -3493,7 +3701,7 @@ mod tests {
         let mut values: FieldMap = HashMap::new();
         values.insert("x".into(), FieldValue::Float(2.0));
         let dfs = vec![derived("y", "x * 10", 0), derived("z", "y + 1", 1)];
-        eval_derived_fields("tjob", "ttab_chain", &dfs, &mut values);
+        eval_derived_fields("tjob", "ttab_chain", &dfs, &mut values, None);
         match values.get("z") {
             Some(FieldValue::Float(v)) => assert!((v - 21.0).abs() < 1e-12),
             other => panic!("expected Float(21.0), got {:?}", other),
@@ -3511,7 +3719,7 @@ mod tests {
             derived("bad", "a / 0", 0),            // NaN
             derived("capped", "min(bad, 5)", 1),   // must NOT become 5
         ];
-        eval_derived_fields("tjob", "ttab_cascade", &dfs, &mut values);
+        eval_derived_fields("tjob", "ttab_cascade", &dfs, &mut values, None);
         assert!(is_null_marker(values.get("bad")));
         assert!(is_null_marker(values.get("capped")));
     }
@@ -3546,7 +3754,7 @@ mod tests {
         let mut values: FieldMap = HashMap::new();
         values.insert("v".into(), FieldValue::Float32(229.4));
         let dfs = vec![derived("v2", "v * 2", 0)];
-        eval_derived_fields("tjob", "ttab_f32", &dfs, &mut values);
+        eval_derived_fields("tjob", "ttab_f32", &dfs, &mut values, None);
         match values.get("v2") {
             Some(FieldValue::Float(v)) => assert!((v - 458.8).abs() < 0.01),
             other => panic!("expected Float(~458.8), got {:?}", other),

@@ -25,6 +25,16 @@ def _ensure_store_logger(logger: logging.Logger) -> None:
         pass
 
 
+def _as_float(v: Any) -> Optional[float]:
+    """Nominal voltage arrives as "415", 415 or "" depending on the caller."""
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 class Store:
     _inst: Optional["Store"] = None
     _lock = threading.Lock()
@@ -586,6 +596,7 @@ class Store:
         unit_id = payload.get("unitId")
         port = payload.get("port")
         gateway_id = payload.get("gatewayId")
+        nominal_voltage = _as_float(payload.get("nominalVoltage"))
 
         # Validate gateway exists if provided
         if gateway_id:
@@ -606,12 +617,23 @@ class Store:
             "unitId": unit_id,
             "port": port,
             "gatewayId": gateway_id,
+            "nominalVoltage": nominal_voltage,
         }
         with self._mtx:
             # Prevent duplicate by name (case-insensitive)
             for d in self._devices.values():
                 if (d.get("name") or "").lower() == name.lower():
                     return self._redact_device(d) or d
+            # ms-resolution ids collide under bulk import (e.g. 200 devices created in
+            # <200ms get the same dev_id, so a later device silently overwrote an earlier
+            # one -> 200 rows became 170 and the import response cross-wired name->id).
+            # Ensure the generated id is unique so every device persists.
+            if not payload.get("id") and dev_id in self._devices:
+                base, n = dev_id, 1
+                while f"{base}_{n}" in self._devices:
+                    n += 1
+                dev_id = f"{base}_{n}"
+                item["id"] = dev_id
             self._devices[dev_id] = item
             appdb.upsert_device(item)
         return self.get_device(dev_id) or item
@@ -646,6 +668,8 @@ class Store:
                 dev["unitId"] = patch.get("unitId")
             if "port" in patch:
                 dev["port"] = patch.get("port")
+            if "nominalVoltage" in patch:
+                dev["nominalVoltage"] = _as_float(patch.get("nominalVoltage"))
             if "gatewayId" in patch:
                 # Validate gateway exists
                 if patch.get("gatewayId"):
@@ -659,7 +683,8 @@ class Store:
             auto_reconnect=patch.get("autoReconnect"),
             unit_id=patch.get("unitId"),
             port=patch.get("port"),
-            gateway_id=patch.get("gatewayId")
+            gateway_id=patch.get("gatewayId"),
+            nominal_voltage=_as_float(patch.get("nominalVoltage")),
         )
         return self._redact_device(self._devices.get(dev_id))
 
@@ -720,6 +745,15 @@ class Store:
                 if (g.get("name") or "").lower() == name.lower() or (g.get("host") or "").lower() == host.lower():
                     return g
             gid = payload.get("id") or f"gw_{int(time.time()*1000)}"
+            # same ms-collision guard as add_device: two new gateways created in the same
+            # millisecond would otherwise share a gid and overwrite each other in the DB.
+            if not payload.get("id"):
+                existing_ids = {g.get("id") for g in self._gateways}
+                if gid in existing_ids:
+                    base, n = gid, 1
+                    while f"{base}_{n}" in existing_ids:
+                        n += 1
+                    gid = f"{base}_{n}"
             gw = {
                 "id": gid,
                 "name": name,

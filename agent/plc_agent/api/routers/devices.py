@@ -57,8 +57,8 @@ def create_device(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.put("/{dev_id}", dependencies=[Depends(require_logger_write)])
 def update_device(dev_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
-    # Allow updating name, autoReconnect, unitId, port, and gatewayId
-    allowed = {k: v for k, v in patch.items() if k in ("name", "autoReconnect", "unitId", "port", "gatewayId")}
+    # Allow updating name, autoReconnect, unitId, port, gatewayId and nominalVoltage
+    allowed = {k: v for k, v in patch.items() if k in ("name", "autoReconnect", "unitId", "port", "gatewayId", "nominalVoltage")}
     item = Store.instance().update_device_metadata(dev_id, allowed)
     if not item:
         raise HTTPException(status_code=404, detail="DEVICE_NOT_FOUND")

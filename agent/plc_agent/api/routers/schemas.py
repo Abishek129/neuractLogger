@@ -50,6 +50,14 @@ _FORMULA_FUNC_ARITY = {
 # constant at runtime (device/derived values are ctx.var'd over them).
 _FORMULA_CONSTANTS = {"pi", "e"}
 
+# Device-level constants the engine seeds into the meval context before
+# evaluating derived fields (see eval_derived_fields in the Rust runner).
+# They are NOT schema fields — nominal voltage is a property of the
+# installation, so one meter model serves 415 V panels and 33 kV incomers
+# with the same formula. A device with no rating set leaves them undefined
+# and the formula evaluates to NULL rather than to a wrong number.
+_DEVICE_CONSTANTS = {"dev_nominal_voltage", "dev_nominal_voltage_ln"}
+
 # Pattern for extracting identifiers from formula strings
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -212,7 +220,7 @@ def _validate_and_order_derived_fields(fields: List[Dict[str, Any]]) -> None:
             raise ValueError(f"FORMULA_SELF_REFERENCE:{key}")
         # Check that all variables reference known field keys (pi/e are meval
         # built-in constants and always known).
-        unknown = formula_vars - all_keys - _FORMULA_CONSTANTS
+        unknown = formula_vars - all_keys - _FORMULA_CONSTANTS - _DEVICE_CONSTANTS
         if unknown:
             raise ValueError(f"FORMULA_UNKNOWN_VARS:{key}:{','.join(sorted(unknown))}")
         # Referenced device fields must be numeric: Text values never enter
@@ -344,6 +352,7 @@ def add_schema_field(schema_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             "scale": payload.get("scale"),
             "desc": payload.get("desc"),
             "formula": formula,
+            "address": payload.get("address"),
         }
         if formula:
             # Validate formula vars against existing schema fields (DP1 self-ref
@@ -401,6 +410,7 @@ def update_schema_field(schema_id: str, field_key: str, payload: Dict[str, Any])
             "scale": payload.get("scale", field.get("scale")),
             "desc": payload.get("desc", field.get("desc")),
             "formula": formula,
+            "address": payload.get("address", field.get("address")),
         }
 
         updated_fields = [merged if f.get("key") == field_key else f for f in fields]

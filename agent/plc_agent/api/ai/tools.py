@@ -1400,9 +1400,10 @@ async def update_table(ctx: ToolContext, *, table_id: str, patch: dict, **kwargs
     _ensure_applying(ctx)
     _emit_progress(ctx, "update_table", "running", f"Updating table {table_id}")
 
-    from ..store import Store
+    # Same path as PATCH /tables: a rename is carried through the target DB too.
+    from ..routers.tables import update_table_and_storage
     try:
-        tbl = Store.instance().update_table(table_id, patch)
+        tbl, renamed = update_table_and_storage(table_id, patch)
     except Exception as e:
         return {"error": str(e), "message": f"Failed to update table: {e}"}
     if not tbl:
@@ -1410,7 +1411,10 @@ async def update_table(ctx: ToolContext, *, table_id: str, patch: dict, **kwargs
 
     ctx.session.save()
     _emit_progress(ctx, "update_table", "complete", f"Table {table_id} updated")
-    return {"status": "ok", "table": tbl}
+    out = {"status": "ok", "table": tbl}
+    if renamed:
+        out["renamed"] = renamed
+    return out
 
 
 async def delete_table(ctx: ToolContext, *, table_id: str,
@@ -1426,26 +1430,15 @@ async def delete_table(ctx: ToolContext, *, table_id: str,
     if not tbl:
         return {"error": "TABLE_NOT_FOUND", "message": f"Table {table_id} not found."}
 
-    # Drop physical table if requested and it was migrated
-    if drop_physical and tbl.get("status") == "migrated":
-        try:
-            from ..routers.tables import migrate as _migrate_fn
-            db_target_id = tbl.get("dbTargetId") or store.get_default_db_target()
-            target = store.get_db_target(db_target_id) if db_target_id else None
-            if target and target.get("conn"):
-                from sqlalchemy import create_engine, text
-                import re as _re_drop
-                engine = create_engine(target["conn"])
-                table_name = tbl.get("name", "")
-                # Sanitize table name to prevent SQL injection
-                if not table_name or not _re_drop.match(r'^[a-zA-Z0-9_]+$', table_name):
-                    logger.warning("drop_physical_table_rejected: unsafe name %r", table_name)
-                else:
-                    with engine.connect() as conn:
-                        conn.execute(text(f'DROP TABLE IF EXISTS "neuract"."{table_name}"'))
-                        conn.commit()
-        except Exception as e:
-            logger.warning("drop_physical_table_failed: %s", e)
+    # Deletion is always complete: physical table + mapping rows, then catalog.
+    # Shares the API endpoint's helper so the two paths can't drift again (this
+    # tool used to drop only migrated tables and never removed mappings).
+    try:
+        from ..routers.tables import purge_table_storage
+        purge_table_storage(tbl)
+    except Exception as e:
+        logger.warning("delete_table purge failed: %s", e)
+        return {"error": "TABLE_PURGE_FAILED", "message": f"Could not remove table data: {e}"}
 
     try:
         ok = store.delete_table(table_id)
@@ -1456,7 +1449,7 @@ async def delete_table(ctx: ToolContext, *, table_id: str,
 
     _emit_progress(ctx, "delete_table", "complete", f"Table {table_id} deleted")
     return {"status": "ok", "table_id": table_id, "deleted": True,
-            "physical_dropped": drop_physical}
+            "physical_dropped": True, "mappings_deleted": True}
 
 
 async def bind_device_to_table(ctx: ToolContext, *, table_id: str,

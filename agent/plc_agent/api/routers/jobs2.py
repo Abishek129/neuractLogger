@@ -190,9 +190,36 @@ def _read_mapping_values(table_id: str) -> Dict[str, Any]:
                     continue
                 try:
                     address = int(addr_raw)
+                    # Industry-standard prefixed addresses are 1-based and encode the
+                    # register TYPE: 4xxxx holding, 3xxxx input, 1xxxx discrete. The
+                    # engine (parse_modbus_address) and validate both decode these;
+                    # reading the prefixed number raw asks for a completely different
+                    # register, which silently returns 0s or garbage.
+                    # Ranges must be BOUNDED and mirror parse_modbus_address() in the
+                    # Rust engine. An unbounded `>= 40001` swallows the 6-digit
+                    # extended form: 421300 would become 381299, far outside the
+                    # 16-bit Modbus space, instead of the correct 21299.
+                    is_input = False
+                    if 40001 <= address <= 49999:
+                        address -= 40001
+                    elif 30001 <= address <= 39999:
+                        address -= 30001
+                        is_input = True
+                    elif 10001 <= address <= 19999:
+                        address -= 10001
+                    elif 400001 <= address <= 465535:
+                        address -= 400001
+                    elif 300001 <= address <= 365535:
+                        address -= 300001
+                        is_input = True
+                    elif 100001 <= address <= 165535:
+                        address -= 100001
                     encoding = (spec.get("encoding") or spec.get("dataType") or "float32").lower()
                     reg_count = _ENC_MAP.get(encoding, (1, ">H"))[0]
-                    rr = client.read_holding_registers(address=address, count=reg_count, device_id=unit_id)
+                    if is_input:
+                        rr = client.read_input_registers(address=address, count=reg_count, device_id=unit_id)
+                    else:
+                        rr = client.read_holding_registers(address=address, count=reg_count, device_id=unit_id)
                     if hasattr(rr, "isError") and rr.isError():
                         values[field] = None
                         continue

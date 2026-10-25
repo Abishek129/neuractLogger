@@ -250,6 +250,14 @@ def _read_mapping_values(table_id: str, job_id: str = "") -> Dict[str, Any]:
                 except Exception as e:
                     log.warning("Modbus read failed field=%s addr=%s err=%s", field, addr_raw, e)
                     values[field] = None
+                    # FIX 2 (dead-connection): _get_modbus_client reuses a cached client whose
+                    # .connected flag stays True even after the gateway drops the socket, so every
+                    # read then fails with "Broken pipe"/"reset" forever. Drop the dead client on a
+                    # transport error so the next cycle reconnects (mirrors the Rust engine).
+                    es = str(e).lower()
+                    if any(t in es for t in ("broken pipe", "reset", "errno 32", "errno 104", "not connected", "closed")):
+                        _drop_modbus_client(host, port)
+                        break
             fields_ms = (time.perf_counter() - t_fields) * 1000.0
             log.info("Job %s [READ_MAPPING] table=%s [MODBUS_FIELDS_TOTAL] count=%d elapsed_ms=%.2f", job_id, table_id, len(values), fields_ms)
         except Exception as e:

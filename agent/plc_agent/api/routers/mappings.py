@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time as _time
 from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -41,6 +42,67 @@ def _resolve_table(table_id: str, *, db_target_override: Optional[str] = None) -
 
 _INT_ENCODINGS = {"uint16_enum", "uint16", "int16", "bool16", "uint32", "int32", "uint64", "int64"}
 
+# Registers each encoding occupies — mirrors modbus_encoding_info() in the Rust
+# engine (rust_jobs/src/main.rs). The live-read check must request the same width
+# the engine will, or the meter rejects a partial read of a multi-register value.
+# Total wall-clock budget for the per-field live-read probing in validate_mapping.
+# Comfortably under nginx's 60s proxy_read_timeout so validation can never 504.
+_VALIDATE_PROBE_BUDGET_SEC = 40
+
+# Gap between consecutive field probes. Serial (RS-485) gateways cannot absorb
+# dozens of back-to-back requests: the meter answers the first few then goes
+# quiet, which looks exactly like a dead device. The Rust engine never hits this
+# because it issues a handful of BUCKETED reads, not one request per field.
+_VALIDATE_PROBE_GAP_SEC = 0.06
+
+
+def _why_unreachable(host: str, port: int) -> str:
+    """Classify a failed Modbus connect by probing the raw socket for the errno."""
+    import socket as _socket
+
+    s = _socket.socket()
+    s.settimeout(3)
+    try:
+        s.connect((host, port))
+        # Reachable now — the Modbus client's failure was transient.
+        return "gateway is reachable; the Modbus session was refused (try again)"
+    except _socket.timeout:
+        return "no response — gateway powered off, or blocked by the network"
+    except OSError as e:
+        if e.errno == 113:  # EHOSTUNREACH
+            return "no route to host — gateway is off the network or the IP is wrong"
+        if e.errno == 111:  # ECONNREFUSED
+            return (
+                "connection refused — nothing is listening on :502 "
+                "(gateway rebooting, or Modbus TCP disabled)"
+            )
+        return f"{e.strerror or e}"
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def _is_unreachable(reason: str) -> bool:
+    """True when the reason means the DEVICE is unusable, not the tag.
+
+    Re-probing every remaining field after this is pure latency — the answer will
+    be identical for all of them.
+    """
+    r = (reason or "").lower()
+    return any(
+        s in r
+        for s in ("could not connect", "connection dropped", "no host", "not installed", "timed out")
+    )
+
+
+_MODBUS_REG_COUNT = {
+    "float32": 2, "float": 2, "uint32": 2, "int32": 2,
+    "uint16": 1, "uint16_enum": 1, "int16": 1, "bool16": 1, "bool": 1, "int": 1,
+    "float64": 4, "uint64": 4, "int64": 4,
+}
+
 
 def _build_field_type_map(table: Dict[str, Any]) -> Dict[str, str]:
     """Build {field_key: encoding_type} from the table's schema fields."""
@@ -66,6 +128,75 @@ def get_mapping(table_id: str) -> Dict[str, Any]:
     required = [f.get("key") for f in schema_fields]
     health = Store.instance().mapping_health(table_id, required_fields=required, schema_fields=schema_fields)
     return {"success": True, "item": {"tableId": table_id, **m}, "health": health}
+
+
+@router.get("/{table_id}/fields")
+def list_schema_fields(table_id: str) -> Dict[str, Any]:
+    """Every field of the table's schema, merged with its current mapping row.
+
+    Drives the mapping grid: the schema defines which columns the table has, the
+    mapping defines where each value is read from. Unmapped fields come back with
+    a blank address so the UI can render the full expected field list instead of
+    an empty grid the user has to retype field names into.
+    """
+    t = _resolve_table(table_id)
+    loaded = _load_mapping_from_user_db(t)
+    if loaded:
+        Store.instance().replace_mapping(
+            table_id, {"deviceId": loaded.get("deviceId"), "rows": loaded.get("rows") or {}}
+        )
+    m = loaded or Store.instance().get_mapping(table_id)
+    rows = m.get("rows") or {}
+    schema = Store.instance().get_schema(t.get("schemaId")) or {"fields": []}
+    schema_fields = schema.get("fields") or []
+
+    items = []
+    for f in schema_fields:
+        key = f.get("key")
+        r = rows.get(key) or {}
+        encoding = r.get("encoding") or f.get("type") or "float32"
+        scale = r.get("scale")
+        if scale is None:
+            scale = f.get("scale") if f.get("scale") is not None else 1
+        items.append(
+            {
+                "fieldKey": key,
+                "type": f.get("type"),
+                "unit": f.get("unit"),
+                "desc": f.get("desc"),
+                # Derived fields are computed from a formula, never read from the
+                # device — upsert_mapping rejects them, so flag them for the UI.
+                "derived": bool(f.get("formula")),
+                "formula": f.get("formula"),
+                # Only a committed device_mappings row counts as mapped. A row with
+                # mapped=false but a non-empty address is "suggested by the schema,
+                # not yet confirmed" — the engine reads device_mappings, not schemas.
+                "mapped": bool(r.get("address")),
+                "protocol": r.get("protocol") or "",
+                # Mapping row wins; the schema field is the per-meter-model default.
+                "address": r.get("address") or f.get("address") or "",
+                "dataType": r.get("dataType")
+                or ("int" if encoding in _INT_ENCODINGS else "float"),
+                # The wire format (int16, uint32, float32, ...). dataType above is
+                # only the logical kind and cannot tell int16 from int32.
+                "encoding": encoding,
+                "scale": scale,
+                "deadband": r.get("deadband") if r.get("deadband") is not None else 0,
+            }
+        )
+
+    required = [f.get("key") for f in schema_fields]
+    health = Store.instance().mapping_health(
+        table_id, required_fields=required, schema_fields=schema_fields
+    )
+    return {
+        "success": True,
+        "tableId": table_id,
+        "schema": {"id": schema.get("id"), "name": schema.get("name")},
+        "deviceId": m.get("deviceId"),
+        "items": items,
+        "health": health,
+    }
 
 
 @router.post("/{table_id}")
@@ -112,6 +243,7 @@ def bulk_apply(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "protocol": entry.get("protocol", "modbus"),
                     "address": str(entry.get("address", "")),
                     "dataType": entry.get("data_type") or entry.get("dataType") or "",
+                    "encoding": entry.get("encoding") or "",
                     "scale": entry.get("scale"),
                     "deadband": entry.get("deadband"),
                 }
@@ -120,6 +252,14 @@ def bulk_apply(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         if k in derived_keys:
             rows.pop(k)
     _validate_row_field_keys(rows)  # L19
+    # The mapping grid sends the real wire encoding. Reject anything the engine
+    # cannot decode instead of silently logging garbage; empty falls back to the
+    # schema's field type below.
+    for k, v in rows.items():
+        enc = (v.get("encoding") or "").strip().lower()
+        if enc and enc not in _MODBUS_REG_COUNT:
+            raise HTTPException(status_code=400, detail=f"ENCODING_INVALID:{k}:{enc}")
+        v["encoding"] = enc
     field_type_map = _build_field_type_map(t)
     for k, v in rows.items():
         if not v.get("encoding"):
@@ -174,8 +314,20 @@ def validate_mapping(table_id: str, payload: Optional[Dict[str, Any]] = None) ->
     problems = []
     if not device_id:
         problems.append({"code": "DEVICE_NOT_BOUND"})
-    # Attempt live-read validation when device is present
+    # Attempt live-read validation when device is present.
+    # This probes the device once per field, so it must stay bounded: a table with
+    # 40 fields against an unresponsive gateway would otherwise spend 40x the socket
+    # timeout and blow past nginx's proxy_read_timeout (observed as an HTTP 504).
+    # Two guards: stop entirely once the device proves unreachable, and cap the
+    # total time spent probing.
     device = Store.instance().get_device(device_id) if device_id else None
+    probe_deadline = _time.monotonic() + _VALIDATE_PROBE_BUDGET_SEC
+    dead_reason: Optional[str] = None
+    # One Modbus connection reused across every field in this call (see
+    # _modbus_can_read). Closed in the finally below.
+    conn_cache: Dict[str, Any] = {}
+    no_response_streak = 0
+    probed_any = False
     for k in required:
         r = rows.get(k) or {}
         if not r:
@@ -194,9 +346,56 @@ def validate_mapping(table_id: str, payload: Optional[Dict[str, Any]] = None) ->
             if proto != "opcua":
                 if r.get("dataType") not in ("float", "int", "bool", "string"):
                     problems.append({"field": k, "code": "MAPPING_TYPE_MISMATCH"})
-            # Live-read check (best-effort)
-            if device and not _can_read_field(device, r):
-                problems.append({"field": k, "code": "TAG_UNREADABLE"})
+            # Live-read check (best-effort). Carry the reason through so the UI can
+            # tell a bad address apart from a busy gateway or an unreachable meter.
+            if device:
+                if dead_reason is not None:
+                    # Device already proved unreachable — don't re-probe 39 more times.
+                    problems.append(
+                        {"field": k, "code": "TAG_UNREADABLE", "message": dead_reason}
+                    )
+                elif _time.monotonic() > probe_deadline:
+                    problems.append({
+                        "field": k,
+                        "code": "TAG_UNCHECKED",
+                        "message": (
+                            f"not checked — validation stopped after "
+                            f"{_VALIDATE_PROBE_BUDGET_SEC}s; fix the reported fields and re-run"
+                        ),
+                    })
+                else:
+                    if probed_any:
+                        _time.sleep(_VALIDATE_PROBE_GAP_SEC)
+                    probed_any = True
+                    ok, reason = _can_read_field(device, r, conn_cache)
+                    if not ok:
+                        # A meter that stops answering makes every remaining probe
+                        # cost a full timeout. After a few in a row, treat it as a
+                        # device-level fault instead of burning the whole budget.
+                        if "no response" in reason.lower():
+                            no_response_streak += 1
+                            # Threshold must exceed the noise floor of a flaky
+                            # link. A marginal RS-485 run drops reads at random;
+                            # tripping at 3 mislabels a working meter as dead.
+                            if no_response_streak >= 12:
+                                dead_reason = (
+                                    f"device stopped responding after {no_response_streak} "
+                                    f"consecutive reads — check unit id, wiring, or meter health"
+                                )
+                        else:
+                            no_response_streak = 0
+                        if _is_unreachable(reason):
+                            dead_reason = reason
+                        problems.append(
+                            {"field": k, "code": "TAG_UNREADABLE", "message": reason}
+                        )
+    for _c in conn_cache.values():
+        try:
+            _c.close()
+        except Exception:
+            pass
+    conn_cache.clear()
+
     # Compute health based on provided rows without mutating store
     # Create a temporary projection of mapping rows for health computation
     tmp = {"deviceId": device_id, "rows": rows}
@@ -228,24 +427,30 @@ def validate_mapping(table_id: str, payload: Optional[Dict[str, Any]] = None) ->
 
 
 # ---------- Live-read helpers ----------
-def _can_read_field(device: Dict[str, Any], row: Dict[str, Any]) -> bool:
+# These return (ok, reason). The reason is surfaced to the UI: a bare boolean
+# collapses "register does not exist", "wrong register type", "meter not
+# responding" and "could not get a socket" into one opaque TAG_UNREADABLE, and
+# those four need completely different fixes.
+def _can_read_field(
+    device: Dict[str, Any], row: Dict[str, Any], conn_cache: Optional[Dict[str, Any]] = None
+) -> tuple[bool, str]:
     try:
         proto = (row.get("protocol") or device.get("protocol") or "").lower()
         if proto == "opcua":
             return _opcua_can_read(device, row)
         if proto == "modbus":
-            return _modbus_can_read(device, row)
-    except Exception:
-        return False
-    return False
+            return _modbus_can_read(device, row, conn_cache)
+    except Exception as e:
+        return False, f"read check failed: {e}"
+    return False, f"unsupported protocol: {proto or '(none)'}"
 
 
-def _opcua_can_read(device: Dict[str, Any], row: Dict[str, Any]) -> bool:
+def _opcua_can_read(device: Dict[str, Any], row: Dict[str, Any]) -> tuple[bool, str]:
     try:
         try:
             from opcua import Client  # type: ignore
         except Exception:
-            return False
+            return False, "opcua client library not installed"
         # Resolve endpoint: gateway.host > params.endpoint
         from ..store import Store
         ep = None
@@ -263,10 +468,10 @@ def _opcua_can_read(device: Dict[str, Any], row: Dict[str, Any]) -> bool:
             params = device.get("params") or {}
             ep = (params.get("endpoint") or "").strip()
         if not ep:
-            return False
+            return False, "no OPC UA endpoint on device or gateway"
         node_id = (row.get("address") or row.get("nodeId") or "").strip()
         if not node_id:
-            return False
+            return False, "no node id on the mapping row"
         # Avoid wildcard/broadcast endpoints
         if "0.0.0.0" in ep:
             ep = ep.replace("0.0.0.0", "127.0.0.1")
@@ -277,22 +482,24 @@ def _opcua_can_read(device: Dict[str, Any], row: Dict[str, Any]) -> bool:
             val = node.get_value()
             # Any non-exceptional read counts as readable
             _ = val  # noqa
-            return True
+            return True, ""
         finally:
             try:
                 client.disconnect()
             except Exception:
                 pass
-    except Exception:
-        return False
+    except Exception as e:
+        return False, f"OPC UA read failed: {e}"
 
 
-def _modbus_can_read(device: Dict[str, Any], row: Dict[str, Any]) -> bool:
+def _modbus_can_read(
+    device: Dict[str, Any], row: Dict[str, Any], conn_cache: Optional[Dict[str, Any]] = None
+) -> tuple[bool, str]:
     try:
         try:
             from pymodbus.client import ModbusTcpClient  # type: ignore
         except Exception:
-            return False
+            return False, "pymodbus not installed"
         # Get host - from gateway or fallback to params
         gateway_id = device.get("gatewayId")
         gateway = None
@@ -306,7 +513,7 @@ def _modbus_can_read(device: Dict[str, Any], row: Dict[str, Any]) -> bool:
             host = (params.get("host") or params.get("ip") or "").strip()
 
         if not host:
-            return False
+            return False, "no host on device or gateway"
 
         # Get port - from device.port or fallback to params or default
         port = device.get("port")
@@ -316,41 +523,87 @@ def _modbus_can_read(device: Dict[str, Any], row: Dict[str, Any]) -> bool:
         else:
             port = int(port)
         addr_raw = str(row.get("address") or "").strip()
-        if not addr_raw or not addr_raw.isdigit():
-            # Accept numeric-like strings; anything else skip
-            try:
-                int(addr_raw)
-            except Exception:
-                return False
+        if not addr_raw:
+            return False, "no address on the mapping row"
         try:
             address = int(addr_raw)
         except Exception:
-            return False
+            return False, f"address {addr_raw!r} is not numeric"
         unit_id = int(device.get("unitId") or device.get("unit_id") or 1)
-        start = 0
-        fn_ok = False
-        client = ModbusTcpClient(host=host, port=port)
+        # One TCP connection per FIELD makes validation O(fields) in round trips —
+        # 36 fields took 21s and blew the probe budget. Reuse a single connection
+        # for the whole validate call; the caller closes it.
+        key = f"{host}:{port}"
+        cached = conn_cache.get(key) if conn_cache is not None else None
+        client = cached or ModbusTcpClient(
+            host=host, port=port, timeout=1.5, retries=1
+        )
         try:
             if not client.connect():
-                return False
-            if address >= 40001:
-                start = address - 40001
-            elif address >= 30001:
-                start = address - 30001
-            elif address >= 10001:
-                start = address - 10001
+                # pymodbus's connect() returns a bare False, so probe the socket
+                # ourselves to recover the real errno. "Host unreachable" (gateway
+                # off/unplugged) and "refused/reset" (single-session gateway already
+                # held by a running job) look identical otherwise, but need opposite
+                # fixes — never blame the tag for either.
+                return False, f"could not connect to {host}:{port} — {_why_unreachable(host, port)}"
+            # Bounded ranges mirroring parse_modbus_address() in the Rust engine.
+            # An unbounded `>= 40001` would swallow the 6-digit extended form
+            # (421300 -> 381299 instead of 21299) and fail on valid addresses.
+            if 40001 <= address <= 49999:
+                start, kind, fc = address - 40001, "holding 4xxxx", "holding"
+            elif 30001 <= address <= 39999:
+                start, kind, fc = address - 30001, "input 3xxxx", "input"
+            elif 10001 <= address <= 19999:
+                start, kind, fc = address - 10001, "discrete 1xxxx", "holding"
+            elif 400001 <= address <= 465535:
+                start, kind, fc = address - 400001, "holding 4xxxxx (extended)", "holding"
+            elif 300001 <= address <= 365535:
+                start, kind, fc = address - 300001, "input 3xxxxx (extended)", "input"
+            elif 100001 <= address <= 165535:
+                start, kind, fc = address - 100001, "discrete 1xxxxx (extended)", "holding"
             else:
-                start = max(0, address)
-            r = client.read_holding_registers(address=start, count=1, device_id=unit_id)
-            fn_ok = (not r.isError()) if hasattr(r, "isError") else True
+                start, kind, fc = max(0, address), "raw offset (0-based)", "holding"
+            # Read the field's REAL width. A float32 spans 2 registers and these
+            # meters reject a 1-register read of it with IllegalDataValue — a
+            # hardcoded count=1 therefore fails on perfectly valid addresses.
+            enc = str(row.get("encoding") or row.get("dataType") or "float32").lower()
+            count = _MODBUS_REG_COUNT.get(enc, 2)
+            if fc == "input":
+                r = client.read_input_registers(address=start, count=count, device_id=unit_id)
+            else:
+                r = client.read_holding_registers(address=start, count=count, device_id=unit_id)
+            if hasattr(r, "isError") and r.isError():
+                # The Modbus exception code IS the diagnosis — pass it through.
+                code = getattr(r, "exception_code", None)
+                meaning = {
+                    1: "IllegalFunction — device does not support this register type",
+                    2: "IllegalDataAddress — register does not exist on this meter",
+                    3: "IllegalDataValue — register count/span rejected",
+                    4: "SlaveDeviceFailure",
+                    6: "SlaveDeviceBusy",
+                    11: "GatewayTargetDeviceFailedToRespond — check unit id / wiring",
+                }.get(code, str(r))
+                return False, (
+                    f"{meaning} (addr {addr_raw} -> {kind} offset {start}, unit {unit_id})"
+                )
+            return True, ""
         finally:
-            try:
-                client.close()
-            except Exception:
-                pass
-        return bool(fn_ok)
-    except Exception:
-        return False
+            if conn_cache is None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+            else:
+                conn_cache[key] = client
+    except (ConnectionResetError, BrokenPipeError) as e:
+        # Classic single-session gateway symptom: the running job owns the socket
+        # and the meter drops ours. Nothing to do with the address.
+        return False, (
+            f"connection dropped by the device ({e}) — a job is most likely holding "
+            f"the only Modbus session; stop it and validate again"
+        )
+    except Exception as e:
+        return False, f"modbus read failed: {e}"
 
 
 @router.delete("/{table_id}/{field_key}")

@@ -103,7 +103,7 @@ Always create entities in dependency order:
 - `delete_device(device_id)` — Delete a device.
 - `delete_schema(schema_id)` — Delete a schema. Fails if tables reference it.
 - `delete_schema_field(schema_id, field_key)` — Remove a field from a schema.
-- `delete_table(table_id, drop_physical?)` — Delete a table. Set `drop_physical=true` to also drop the physical DB table.
+- `delete_table(table_id)` — Delete a table completely: its physical DB table, all its mapping rows, and its catalog entry. Irreversible; re-creating a table with the same name starts fresh.
 - `delete_mapping_row(table_id, field_key)` — Remove a single field mapping from a table.
 - `delete_db_target(target_id, force?)` — Delete a DB target. Fails if it is the default or in use.
 - `unbind_device_from_table(table_id)` — Remove a device binding from a table.
@@ -113,7 +113,7 @@ Always create entities in dependency order:
 **Gated manage (require approved plan):**
 - `update_gateway(gateway_id, patch)` — Update gateway config (name, host, ports, protocol_hint).
 - `update_device(device_id, patch)` — Update device metadata. Allowed fields: name, autoReconnect, unitId, port, gatewayId.
-- `update_table(table_id, patch)` — Update table metadata (name, schemaId, dbTargetId).
+- `update_table(table_id, patch)` — Update table metadata (name, schemaId, dbTargetId). A name change also renames the physical DB table and moves its mappings; refused while the table is in a running job or if the name is taken.
 - `add_schema_field(schema_id, field)` — Add a new field to an existing schema.
 - `bind_device_to_table(table_id, device_id)` — Bind a device to a table.
 - `copy_mappings(src_table_id, dst_table_id)` — Copy mapping rows (not device binding) from one table to another.
