@@ -2009,3 +2009,45 @@ The 4th sheet runs after Elements, Buses and Connections: **relations first, the
 - The export has a **Meters** sheet: `Table (MFM)`, `Element`, `Bus`, `Role`, `Measures`, `Schema`, `Device`.
 
 Existing data: archbox had no MFMs placed. The one-time migration keeps any old device slot whose device has exactly one table, and logs the rest.
+
+## 18. Push the map to the EMS sidebar (2026-10-27)
+
+One request sends the whole EMS map to the EMS backend's `POST /api/ems/push/`, which replaces its sidebar. Implementation: `agent/plc_agent/api/ems_push.py`.
+
+| Endpoint | |
+|---|---|
+| `POST /equipment/push/ems` | **Preview**: the EMS checks and reports, writes nothing. Needs `logger-write` |
+| `POST /equipment/push/ems?commit=true` | Writes, only if the EMS finds no errors at all |
+
+**How the map becomes the sidebar**
+
+The element's category is the sidebar (EMS), its kind decides panel or standalone meters, and its type is the nav category. Zones are not part of the EMS nav.
+
+| Map | EMS sidebar |
+|---|---|
+| Type | Nav category, labelled with the type name in the plural ("HT Panel" → "HT Panels"), in type order. The EMS matches categories by label, so this lands in its existing "HT Panels" / "PCC Panels". Types with nothing to show are left out |
+| Distribution element (EMS category) | Panel, matched by name. `panel_kind` from the type's name: HT / PCC / AMF / UPS, else `distribution_panel`. Nameplate `nominal_voltage_v` from its voltage field |
+| MFM on a panel's bus | Incomer slot → **Incoming**, outgoer slot → **Outgoing**, spare → **Spare**; bus by bus, in slot order |
+| MFM on a feed between two panels | Listed at both ends (outgoing of the feeding panel, incoming of the fed one), unless that end has its own MFM for the same feed |
+| MFM of a single element | Standalone meter in its type's category |
+| MFM (logger table) | `table_name`; a new EMS meter is named after the device. `schema` = the table's schema; nameplate `nominal_voltage_v` from the device |
+| Schema | EMS schema `code` = schema name, `logger_id` = schema id, version 1, fields in key order |
+
+**Left out**, and listed in `skipped` (`{element, reason}` or `{table, element, reason}`): elements without a type, spare elements, and MFMs the EMS can't bind: a table that isn't migrated, has no device, or whose device has several migrated tables (the EMS binds a meter through its device). Source and BMS elements are not part of the EMS sidebar.
+
+The EMS side is a **full sync**: panels and categories that aren't in the push are retired / hidden there (never deleted; pushing them again brings them back).
+
+**Response**: `200` `{success, committed, skipped, request, ems}`. `request` is the body that was sent, and `ems` is the EMS report (`ok`, `summary`, `errors`, `warnings`, `changes`, `nav`). When the EMS reports errors: `400` with the same keys plus `detail: "EMS_PUSH_INVALID: N error(s); nothing was saved"`.
+
+| Error | Status | When |
+|---|---|---|
+| `NOTHING_TO_PUSH` | 400 | No typed EMS element has a panel or an MFM to show |
+| `EMS_NOT_CONFIGURED` | 503 | `EMS_API_USER` / `EMS_API_PASSWORD` not set |
+| `EMS_AUTH_FAILED` | 502 | The EMS refused the user (it must be an active EMS staff user) |
+| `EMS_UNREACHABLE`, `EMS_BAD_RESPONSE` | 502 | No answer, or not a push report |
+
+**Configuration** (`/etc/neuract/loggerfast.env`): `EMS_API_URL` (default `http://127.0.0.1:18889`), `EMS_API_USER`, `EMS_API_PASSWORD` (sent as HTTP Basic), `EMS_API_TIMEOUT` (seconds, default 120).
+
+**Limits**
+- EMS schema versions are immutable. If a schema changes after it was pushed, the EMS refuses the push until that schema gets a new version on the EMS side.
+- The EMS looks up new meters' tables through this API's `/devices` and `/tables`. Both need a `logger-read` token, so the EMS must be configured with LoggerFast credentials.

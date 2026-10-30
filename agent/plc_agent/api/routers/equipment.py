@@ -18,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import equipment as svc
 from .. import equipment_import as imp
+from .. import ems_push
 
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,19 @@ async def import_ems(file: UploadFile = File(...), dryRun: bool = False) -> Any:
             content={"detail": f"IMPORT_INVALID: {n} row(s) have errors; nothing was saved", **report},
         )
     return report
+
+
+# ---------- EMS sidebar push ----------
+@router.post("/push/ems")
+def push_ems(commit: bool = False) -> Any:
+    """Send the whole map to the EMS sidebar (see ems_push.py). A preview
+    unless ?commit=true; the answer carries the body sent, what was left out,
+    and the EMS report."""
+    res = _call(ems_push.push, commit)
+    if not res["success"]:
+        n = len(res["ems"].get("errors") or [])
+        return JSONResponse(status_code=400, content={"detail": f"EMS_PUSH_INVALID: {n} error(s); nothing was saved", **res})
+    return res
 
 
 # ---------- Zones (user-managed) ----------
