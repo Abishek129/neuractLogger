@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import time
-from typing import Dict, Any
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 
+from ..equipment import EquipmentError
 from ..permissions import require_logger_write
 
+from .. import appdb
 from ..store import Store
 
 
@@ -15,10 +18,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/devices")
 
 
+def _with_verification(item: Optional[Dict[str, Any]], saved: Optional[Dict[str, Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
+    """Attach the last saved quick_test result as `verification` (null if never verified)."""
+    if not item:
+        return item
+    saved = saved if saved is not None else appdb.load_device_verifications()
+    return {**item, "verification": saved.get(item.get("id"))}
+
+
 @router.get("")
 def list_devices() -> Dict[str, Any]:
-
-    return {"items": Store.instance().list_devices()}
+    saved = appdb.load_device_verifications()
+    return {"items": [_with_verification(d, saved) for d in Store.instance().list_devices()]}
 
 
 @router.post("", dependencies=[Depends(require_logger_write)])
@@ -57,17 +68,45 @@ def create_device(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.put("/{dev_id}", dependencies=[Depends(require_logger_write)])
 def update_device(dev_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
-    # Allow updating name, autoReconnect, unitId, port, gatewayId and nominalVoltage
-    allowed = {k: v for k, v in patch.items() if k in ("name", "autoReconnect", "unitId", "port", "gatewayId", "nominalVoltage")}
-    item = Store.instance().update_device_metadata(dev_id, allowed)
-    if not item:
+    """Partial update. Metadata: name, autoReconnect, unitId, port, gatewayId
+    (null = direct device), nominalVoltage. Connection: protocol and params (host, endpoint,
+    ... merged into the stored params; null removes a key). Changing the
+    address resets the device to "disconnected" and clears its verification."""
+    store = Store.instance()
+    if not store.get_device(dev_id):
         raise HTTPException(status_code=404, detail="DEVICE_NOT_FOUND")
-    return {"success": True, "item": item}
+    proto = patch.get("protocol")
+    if proto is not None:
+        if not isinstance(proto, str) or not store.is_valid_protocol(proto.strip()):
+            raise HTTPException(
+                status_code=400,
+                detail=f"PROTOCOL_INVALID: '{proto}'. Valid: {', '.join(store.list_protocol_types())}",
+            )
+    params = patch.get("params")
+    if params is not None and not isinstance(params, dict):
+        raise HTTPException(status_code=400, detail="PARAMS_INVALID: params must be an object")
+    allowed = {
+        k: v for k, v in patch.items()
+        if k in ("name", "autoReconnect", "unitId", "port", "gatewayId", "nominalVoltage") and v is not None
+    }
+    try:
+        item = store.update_device_metadata(dev_id, allowed)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    clear_gateway = "gatewayId" in patch and patch["gatewayId"] is None
+    if proto is not None or params is not None or clear_gateway:
+        item = store.update_device_connection(
+            dev_id, protocol=proto.strip() if isinstance(proto, str) else None, params=params, clear_gateway=clear_gateway
+        )
+    return {"success": True, "item": _with_verification(item)}
 
 
 @router.delete("/{dev_id}", dependencies=[Depends(require_logger_write)])  # SEC-3/C6
 def delete_device(dev_id: str) -> Dict[str, Any]:
-    ok = Store.instance().delete_device(dev_id)
+    try:
+        ok = Store.instance().delete_device(dev_id)
+    except EquipmentError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
     if not ok:
         raise HTTPException(status_code=404, detail="DEVICE_NOT_FOUND")
     return {"success": True}
@@ -133,4 +172,11 @@ def quick_test(dev_id: str) -> Dict[str, Any]:
         except Exception as exc:
             logger.exception("Failed to persist quick-test degraded state", extra={"device_id": dev_id})
             err = err or str(exc) or "TEST_FAILED"
-    return {"success": ok, "latencyMs": latency, "error": err}
+    # F8: keep the result; GET /devices returns it as `verification`.
+    verification = {"ok": bool(ok), "latencyMs": latency if ok else None, "error": None if ok else (err or "TEST_FAILED"),
+                    "at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")}
+    try:
+        appdb.save_device_verification(dev_id, verification["ok"], verification["latencyMs"], verification["error"], verification["at"])
+    except Exception:
+        logger.exception("Failed to save verification", extra={"device_id": dev_id})
+    return {"success": ok, "latencyMs": latency, "error": err, "verification": verification}

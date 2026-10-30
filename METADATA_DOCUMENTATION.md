@@ -101,6 +101,8 @@ Multi-Function Meters — 3-phase energy meters logging electrical parameters.
 
 ### 3.2 Equipment Devices (52)
 
+> **Naming note:** "Equipment devices" here means the non-MFM device types (AHU, chiller, pump…). It is not the same as the **Electrical Equipment model** in [section 9](#9-electrical-equipment-model), which groups devices into panels and assets.
+
 | Type             | Count | Tables                              |
 |-----------------|-------|--------------------------------------|
 | AHU             | 11    | `ahu_001` – `ahu_011`               |
@@ -525,3 +527,95 @@ Each data table has:
 │  Reads from meta_data_version1                          │
 └─────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 9. Electrical Equipment Model
+
+These tables live in the metadata DB only. The Rust engine never reads them, so data logging is unaffected. The API is under `/equipment` (`API_DOCUMENTATION.md` §24).
+
+| Table | Columns | Notes |
+|-------|---------|-------|
+| `app_equipment_category` | id, name, type (`single` / `distribution`), sort_order, config_json | **Edited in the DB only.** `config_json` = `{"fields": [...], "node": {"incomers": n, "outgoers": n}}`. The `node` part is the default capacity for single categories. Seeded: Source, Transformer, HT Panel, LT Panel, Load |
+| `app_equipment` | id, name (unique), category_id → category, subtype, spare, description, values_json, created_at, updated_at | `values_json` = `{fieldId: {"value", "unit"}}` |
+| `app_bus` | id, equipment_id → equipment (cascade), name, sort_order, incomers, outgoers, is_main, coupled_next | **Connection nodes.** Distribution equipment has buses (`is_main = 0`). Single equipment has exactly one hidden main node (`is_main = 1`) holding its own capacity and rules. `coupled_next` = a bus coupler to the next bus |
+| `app_bus_category` | bus_id → bus (cascade), role (`incomer` / `outgoer`), category_id → category | Allowed categories per node side. No rows for a side means not restricted |
+| `app_bus_equipment` | bus_id → bus (cascade), equipment_id → equipment, role, sort_order | Equipment connected to a bus. Several buses per equipment are allowed; loops are rejected |
+| `app_bus_meter` | bus_id → bus (cascade), device_id → `app_devices` (**unique**), role (`incomer` / `outgoer` on a bus; NULL on a main node), sort_order | MFMs. Panels meter bus points; single equipment meters itself. A device is in one place only |
+
+Field definitions are seeded only where `config_json` is empty, so changes made in the DB survive restarts. To add a category:
+
+```sql
+INSERT INTO app_equipment_category (id, name, type, sort_order, config_json) VALUES
+ ('busduct', 'Busduct', 'distribution', 6,
+  '{"fields": [{"id": "rating", "label": "Rating", "kind": "quantity", "units": ["A"], "required": true}]}');
+```
+
+Field `kind`: `quantity` (with `units`), `choice` (with `options`) or `text`. A field with `"required": true` counts towards readiness. `role` = `voltage`, `voltage.in` or `voltage.out` feeds the Voltage column.
+
+---
+
+## 10. Alerts
+
+| Table | Columns | Written by |
+|---|---|---|
+| `app_alert` | `id, name, severity, color, sort_order`. Unique on `lower(name)`. `critical`/`mild`/`info` are seeded once (`app_meta.alert_levels_seeded`) | API |
+| `app_schema_alert` | `id, schema_id, field_key, alert_id, op, threshold`. Unique on `(schema_id, field_key, alert_id)`. `op` is CHECK-constrained to `> >= < <= == !=` | API |
+| `app_table_alert` | `id, table_id, field_key, alert_id, op NULL, threshold NULL, enabled`. Unique on `(table_id, field_key, alert_id)`. A NULL op/threshold falls back to the schema rule | API |
+| `app_alert_state` | `table_id, field_key, alert_id, value, since`. PK is `(table_id, field_key)`; a row exists only while the field is not normal | Rust engine |
+| `app_alert_event` | `id, table_id, field_key, from_alert_id, to_alert_id, value, op, threshold, job_id, at`. Indexed on `(table_id, at)`; a NULL from/to means normal | Rust engine |
+
+**Engine flow**
+
+At job start the engine:
+- loads each table's effective rules (schema rules joined via `app_device_tables.schema_id`, then merged with the table's overrides);
+- loads the existing states.
+
+After each read, once derived fields are computed:
+- it evaluates every rule on the field values; the highest severity that matches wins;
+- if the result differs from the stored state, it upserts or deletes the state row, inserts an event and posts a notification of type `alert`.
+
+Deleting a table, schema or schema field removes the related rules, overrides and states. Events are kept.
+
+---
+
+## 11. Electrical: groups and MFM slots
+
+| Change | Detail |
+|---|---|
+| `app_equipment_group (id, name, sort_order)` | New top level: `ems`, `source`, `bms`. Missing rows are seeded at boot, and edits in the DB are kept. Unique on `lower(name)` |
+| `app_equipment_category.group_id` | FK to `app_equipment_group(id)`. NULL is backfilled to `ems`; all seeded categories are under EMS |
+| `app_bus_meter.equipment_id` | On a bus: the attached incomer/outgoer this MFM measures. NULL with `role='outgoer'` means a **spare**. Partial unique index `ux_bus_meter_relation (bus_id, equipment_id) WHERE equipment_id IS NOT NULL`: one MFM per relation |
+
+Rules enforced in `equipment.py`:
+- an incoming MFM needs a relation;
+- spares take outgoing points;
+- detaching a metered outgoer turns its MFM into a spare;
+- detaching a metered incomer is refused.
+
+---
+
+## 12. Elements: category + kind + type (2026-10-27)
+
+| Table / column | Meaning |
+|---|---|
+| `app_equipment_category (id, name, sort_order, kinds_json)` | EMS / Source / BMS. It was `app_equipment_group` until 2026-10-27. `kinds_json` holds the allowed kinds: EMS has both, Source/BMS have none |
+| `app_equipment_type (id, name, sort_order, config_json)` | User-defined types with their nameplate fields and default node capacity. It was `app_equipment_category` (its `type` / `group_id` columns were dropped). The built-in five are seeded once (`app_meta.equipment_types_seeded`) |
+| `app_equipment.category_id` / `.kind` / `.type_id` | Category (FK, NOT NULL), `single` \| `distribution` (CHECK, NOT NULL), and type (FK, NULL). The old `category_id` became `type_id`. `subtype` is no longer used |
+| `app_bus_type (bus_id, role, type_id)` | Allowed types per node side. It was `app_bus_category` |
+
+FKs: `fk_element_category`, `fk_element_type`, `fk_bus_type_bus`, `fk_bus_type_type`.
+
+The migration (`appdb._migrate_equipment_to_types`) is one-time, in place and idempotent. It runs only on the old schema. §11 (groups) is superseded.
+
+---
+
+## 13. Zones
+
+`app_equipment_zone (id, name, sort_order)` holds the user-managed zones (unique on `lower(name)`). `app_equipment.zone_id` is nullable, with FK `fk_element_zone` and index `ix_equipment_zone`.
+
+---
+
+## 14. MFM slots hold logger tables
+
+`app_bus_meter (bus_id, table_id UNIQUE, role, equipment_id, sort_order)`, PK `(bus_id, table_id)`, FK `fk_bus_meter_table` → `app_device_tables(id)`. It replaced `device_id` on 2026-10-27 (`appdb._migrate_bus_meter_to_tables`). The device and schema are read through the table.

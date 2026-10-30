@@ -266,6 +266,43 @@ def create_job(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/{job_id}")
+def get_job(job_id: str) -> Dict[str, Any]:
+    job = Store.instance().get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
+    return {"item": job}
+
+
+@router.patch("/{job_id}", dependencies=[Depends(require_logger_write)])
+def update_job(job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Edit a job: any of name, tables, intervalMs, enabled, cpuBudget, type, triggers.
+
+    A running job must be stopped or paused first (409 JOB_RUNNING): the Rust
+    engine reads a job's config only when it starts it."""
+    try:
+        return {"success": True, "item": Store.instance().update_job(job_id, payload)}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
+    except RuntimeError:
+        raise HTTPException(status_code=409, detail="JOB_RUNNING: stop or pause the job before editing it")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{job_id}/resume", dependencies=[Depends(require_logger_write)])
+def resume_job(job_id: str) -> Dict[str, Any]:
+    """Resume a paused job (409 JOB_NOT_PAUSED otherwise). The Rust engine picks
+    it up again on its next poll, with the job's current config."""
+    job = Store.instance().get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
+    if (job.get("status") or "").lower() != "paused":
+        raise HTTPException(status_code=409, detail=f"JOB_NOT_PAUSED: status is {job.get('status')}")
+    Store.instance().set_job_status(job_id, "running")
+    return {"success": True, "message": "resumed"}
+
+
 @router.post("/{job_id}/start", dependencies=[Depends(require_logger_write)])
 def start_job(job_id: str, request: Request, background_tasks: BackgroundTasks) -> Dict[str, Any]:
     job = Store.instance().get_job(job_id)

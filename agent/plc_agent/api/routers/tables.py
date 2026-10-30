@@ -22,6 +22,7 @@ from sqlalchemy import (
     REAL,
 )
 
+from .. import appdb
 from ..store import Store
 from pathlib import Path
 import logging
@@ -98,7 +99,14 @@ def _engine_for_target(target_id: Optional[str]):
 
 
 def _to_sa_type(ftype: str):
+    # A type word from the DB-managed list (e.g. "REAL") is reduced to its
+    # register encoding first; only new columns are affected (migrate never
+    # alters existing ones).
     k = (ftype or "").lower()
+    try:
+        k = {r["id"].lower(): r["encoding"] for r in appdb.load_field_types()}.get(k, k)
+    except Exception:
+        pass
     if k in ("int", "integer", "uint16", "uint16_enum", "int16", "uint32", "int32", "uint64", "int64"):
         return REAL
     if k in ("float", "double", "number", "float32", "float64"):
@@ -470,7 +478,12 @@ def migrate_single(table_id: str) -> Dict[str, Any]:
     result = migrate({"ids": [table_id]})
     items = result.get("items", [])
     if items and "error" in items[0]:
-        raise HTTPException(status_code=404, detail=items[0]["error"])
+        err = items[0]
+        if err["error"] == "TABLE_NOT_FOUND":
+            raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
+        # Only an unknown table is a 404; a failed migration is 4xx/500.
+        status = err.get("status") if isinstance(err.get("status"), int) and 400 <= err["status"] < 600 else 500
+        raise HTTPException(status_code=status, detail=f"MIGRATE_FAILED: {err.get('detail') or 'unknown error'}")
     return {"success": True, "item": items[0] if items else {}}
 
 
@@ -563,6 +576,9 @@ def migrate(payload: Dict[str, Any]) -> Dict[str, Any]:
         # item reports an error and the catalog status stays unchanged.
         try:
             results.append(_migrate_one(tid, t))
+        except HTTPException as e:
+            log.warning("migrate: table=%s name=%s refused: %s", tid, t.get("name"), e.detail)
+            results.append({"id": tid, "error": "MIGRATE_FAILED", "detail": str(e.detail), "status": e.status_code})
         except Exception as e:
             log.warning("migrate: table=%s name=%s failed: %s", tid, t.get("name"), e)
             results.append({"id": tid, "error": "MIGRATE_FAILED", "detail": str(e)})
@@ -801,6 +817,14 @@ def delete_table(table_id: str) -> Dict[str, Any]:
     # Safety: reject if table is in a running job
     if _in_running_job(table_id):
         raise HTTPException(status_code=409, detail="TABLE_HAS_RUNNING_JOBS")
+    # An element measures through this table (MFM): detach it there first.
+    # Checked before the purge so storage is never dropped for a refused delete.
+    from ..equipment import meter_owner
+
+    owner = meter_owner(table_id)
+    if owner:
+        where = owner["name"] if owner["is_main"] else f"{owner['name']} {owner['bus_name']}"
+        raise HTTPException(status_code=409, detail=f"TABLE_ATTACHED_TO_EQUIPMENT: {where} ({owner['id']})")
     try:
         purge_table_storage(t)
     except Exception as e:

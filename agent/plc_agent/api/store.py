@@ -86,6 +86,7 @@ class Store:
         schema = {
             "id": payload.get("id") or f"sch_{int(time.time()*1000)}",
             "name": name,
+            "description": payload.get("description"),
             "fields": payload.get("fields") or [],
         }
         with self._mtx:
@@ -173,6 +174,18 @@ class Store:
         with self._mtx:
             return next((s for s in self._schemas if s.get("id") == schema_id), None)
 
+    def schema_name_taken(self, name: str, exclude_id: str = "") -> bool:
+        with self._mtx:
+            return any(
+                (s.get("name") or "").lower() == name.lower() and s.get("id") != exclude_id for s in self._schemas
+            )
+
+    def update_schema_meta(self, schema_id: str, name: str, description: Optional[str]) -> Optional[Dict[str, Any]]:
+        with self._mtx:
+            appdb.update_schema_meta(schema_id, name, description)
+            self._schemas = appdb.load_schemas()
+            return next((s for s in self._schemas if s.get("id") == schema_id), None)
+
     # ---------------- Jobs ----------------
     def list_jobs(self) -> List[Dict[str, Any]]:
         with self._mtx:
@@ -230,6 +243,67 @@ class Store:
             # Persist to App Local DB
             appdb.upsert_job(job)
         return job
+
+    def _check_job_tables(self, tables: Any) -> List[str]:
+        if not isinstance(tables, list) or len(tables) == 0:
+            raise ValueError("NO_TABLES")
+        for tid in tables:
+            t = self.get_table(tid)
+            if not t:
+                raise ValueError("NO_MAPPED_COLUMNS")
+            schema = self.get_schema(t.get("schemaId") or "") or {}
+            sfields = schema.get("fields", [])
+            health = self.mapping_health(tid, required_fields=[f.get("key") for f in sfields], schema_fields=sfields)
+            if health == "Unmapped":
+                raise ValueError("NO_MAPPED_COLUMNS")
+        return tables
+
+    def update_job(self, job_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+        """Partial edit of a job (not while running: the Rust engine never
+        reloads a running job's config). Editable: name, tables, intervalMs,
+        enabled, cpuBudget, type, triggers."""
+        with self._mtx:
+            job = next((j for j in self._jobs if j.get("id") == job_id), None)
+        if not job:
+            raise KeyError("JOB_NOT_FOUND")
+        if (job.get("status") or "").lower() == "running":
+            raise RuntimeError("JOB_RUNNING")
+        new = dict(job)
+        if "name" in patch:
+            name = (patch.get("name") or "").strip() if isinstance(patch.get("name"), str) else ""
+            if not name:
+                raise ValueError("NAME_REQUIRED")
+            new["name"] = name
+        if "type" in patch:
+            jtype = (patch.get("type") or "").strip().lower() if isinstance(patch.get("type"), str) else ""
+            if jtype not in ("continuous", "trigger", "triggered"):
+                raise ValueError("TYPE_INVALID")
+            new["type"] = "trigger" if jtype == "triggered" else jtype
+        if "tables" in patch:
+            new["tables"] = self._check_job_tables(patch.get("tables"))
+        if "intervalMs" in patch:
+            iv = patch.get("intervalMs")
+            if isinstance(iv, bool) or not isinstance(iv, int) or iv < 100:
+                raise ValueError("INTERVAL_INVALID: intervalMs must be a whole number >= 100")
+            new["intervalMs"] = iv
+        if "enabled" in patch:
+            if not isinstance(patch.get("enabled"), bool):
+                raise ValueError("ENABLED_INVALID")
+            new["enabled"] = patch["enabled"]
+        if "cpuBudget" in patch:
+            if patch.get("cpuBudget") not in ("low", "balanced", "high"):
+                raise ValueError("CPU_BUDGET_INVALID: low, balanced or high")
+            new["cpuBudget"] = patch["cpuBudget"]
+        if "triggers" in patch:
+            if not isinstance(patch.get("triggers"), list):
+                raise ValueError("TRIGGERS_INVALID")
+            new["triggers"] = patch["triggers"]
+        with self._mtx:
+            appdb.upsert_job(new)
+            for i, j in enumerate(self._jobs):
+                if j.get("id") == job_id:
+                    self._jobs[i] = new
+        return new
 
     def set_job_status(self, job_id: str, status: str) -> Optional[Dict[str, Any]]:
         with self._mtx:
@@ -366,6 +440,13 @@ class Store:
         return None
 
     def delete_table(self, table_id: str) -> bool:
+        # Refuse while the table is attached to an element as an MFM.
+        from .equipment import EquipmentError, meter_owner
+
+        owner = meter_owner(table_id)
+        if owner:
+            where = owner["name"] if owner["is_main"] else f"{owner['name']} {owner['bus_name']}"
+            raise EquipmentError(409, "TABLE_ATTACHED_TO_EQUIPMENT", f"{where} ({owner['id']})")
         with self._mtx:
             before = len(self._tables)
             self._tables = [t for t in self._tables if t.get("id") != table_id]
@@ -648,6 +729,13 @@ class Store:
             return self._redact_device(dev) if dev else None
 
     def delete_device(self, dev_id: str) -> bool:
+        # Refuse while one of the device's logger tables is attached to an element as an MFM.
+        from .equipment import EquipmentError, device_meter_owner
+
+        owner = device_meter_owner(dev_id)
+        if owner:
+            where = owner["name"] if owner["is_main"] else f"{owner['name']} {owner['bus_name']}"
+            raise EquipmentError(409, "DEVICE_ATTACHED_TO_EQUIPMENT", f"table {owner['table_name']} on {where} ({owner['id']})")
         with self._mtx:
             ok = self._devices.pop(dev_id, None) is not None
         if ok:
@@ -686,6 +774,45 @@ class Store:
             gateway_id=patch.get("gatewayId"),
             nominal_voltage=_as_float(patch.get("nominalVoltage")),
         )
+        return self._redact_device(self._devices.get(dev_id))
+
+    def update_device_connection(self, dev_id: str, *, protocol: Optional[str], params: Optional[Dict[str, Any]], clear_gateway: bool = False) -> Optional[Dict[str, Any]]:
+        """Change protocol and/or connection params (merged into the stored ones).
+
+        Masked secrets ("***") keep the stored value. A changed address resets
+        the device to "disconnected" and clears its saved verification."""
+        with self._mtx:
+            dev = self._devices.get(dev_id)
+            if not dev:
+                return None
+            old_params = dict(dev.get("params") or {})
+            new_params = dict(old_params)
+            for k, v in (params or {}).items():
+                if k in ("pass", "password") and v == "***":
+                    continue
+                if v is None:
+                    new_params.pop(k, None)
+                else:
+                    new_params[k] = v
+            new_proto = (protocol or dev.get("protocol") or "").lower()
+            address_changed = new_proto != (dev.get("protocol") or "").lower() or new_params != old_params
+            dev["protocol"] = new_proto
+            dev["params"] = new_params
+            if clear_gateway:
+                dev["gatewayId"] = None
+            if address_changed:
+                dev["status"] = "disconnected"
+                dev["latencyMs"] = None
+                dev["lastError"] = None
+        appdb.update_device_connection(dev_id, protocol=new_proto, params=new_params)
+        if clear_gateway:
+            appdb.clear_device_gateway(dev_id)
+        if address_changed:
+            try:
+                appdb.update_device_status(dev_id, status="disconnected", latency_ms=None, last_error=None)
+            except Exception:
+                pass
+            appdb.clear_device_verification(dev_id)
         return self._redact_device(self._devices.get(dev_id))
 
     def set_device_status(self, dev_id: str, *, status: str, latency_ms: Optional[int] = None, last_error: Optional[str] = None) -> Optional[Dict[str, Any]]:

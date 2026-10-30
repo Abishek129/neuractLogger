@@ -31,11 +31,16 @@ function getToken() {
   )
 }
 
-function setToken(tok) {
-  if (!tok) return
-  cachedToken = tok
-  try { if (typeof localStorage !== 'undefined') localStorage.setItem('agent_token', tok) } catch {}
+export function setToken(tok) {
+  cachedToken = tok || null
+  try {
+    if (typeof localStorage === 'undefined') return
+    if (tok) localStorage.setItem('agent_token', tok)
+    else localStorage.removeItem('agent_token')
+  } catch {}
 }
+
+export function hasToken() { return !!getToken() }
 
 async function tryReadLockfile() {
   try {

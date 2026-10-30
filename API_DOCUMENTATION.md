@@ -31,6 +31,7 @@
 21. [Supported Protocols](#21-supported-protocols)
 22. [Database Providers](#22-database-providers)
 23. [Environment Variables](#23-environment-variables)
+24. [Electrical Equipment](#24-electrical-equipment)
 
 ---
 
@@ -2187,3 +2188,321 @@ The following endpoints require a valid JWT with the `logger_write` role:
 | `KC_ADMIN_CLIENT_ID` | `neuract_owner` | Keycloak service account client |
 | `KC_ADMIN_CLIENT_SECRET` | — | Keycloak service account secret |
 | `AGENT_STRICT_PORT` | `0` | If `1`, exit if preferred port is busy |
+
+---
+
+## 24. Electrical Equipment
+
+Prefix: `/equipment`. All routes need a token: reads need `logger_read`, writes need `logger_write`. This section backs the **Electrical Elements** screen: the list, adding, and the edit panel.
+
+**Model:**
+- **Category:** read-only here and edited in the DB. Its `type` is `single` or `distribution`, and it carries:
+  - **`fields`:** the electrical fields (id, label, kind `quantity` / `choice` / `text`, units or options, `required`, and an optional `role` of `voltage`, `voltage.in` or `voltage.out`).
+  - **`defaultCapacity`:** single categories only.
+
+  Seeded categories: Source, Transformer, HT Panel, LT Panel and Load.
+- **Equipment:** name, category, `subtype`, `spare` ("not on map"), `description`, and `values` (field id → `{value, unit}`).
+- **Connection nodes:**
+  - **Distribution equipment** has buses (Bus A, B…). Each bus has incomer and outgoer capacity, allowed categories, attached equipment, MFMs metering its incomer and outgoer **points**, and a coupler flag to the next bus.
+  - **Single equipment** has the same rules on itself: `maxIncomers` / `maxOutgoers`, `incomingCategories` / `outgoingCategories`, and MFMs.
+- **Attaching equipment to a bus checks both ends:** the bus side, and, if the attached equipment is single, its own side as well. Equipment can be fed from several places, and loops are rejected.
+
+**Errors:** `{"detail": "CODE"}` or `{"detail": "CODE: context"}`, with 400 for validation, 404 for missing records and 409 for conflicts.
+
+### GET /equipment/categories
+```json
+{ "items": [
+  { "id": "transformer", "name": "Transformer", "type": "single", "sortOrder": 2,
+    "fields": [ { "id": "primary_voltage", "label": "Primary voltage", "kind": "quantity", "units": ["kV","V"], "required": true, "role": "voltage.in" },
+                { "id": "secondary_voltage", "label": "Secondary voltage", "kind": "quantity", "units": ["kV","V"], "required": true, "role": "voltage.out" },
+                { "id": "rated_capacity", "label": "Rated capacity", "kind": "quantity", "units": ["kVA","MVA"], "required": true },
+                { "id": "phase", "label": "Phase", "kind": "choice", "options": ["3 Phase","1 Phase"], "required": true } ],
+    "defaultCapacity": { "incomers": 1, "outgoers": 1 } },
+  { "id": "lt_panel", "name": "LT Panel", "type": "distribution", "sortOrder": 4,
+    "fields": [ { "id": "bus_voltage", "label": "Bus / operating voltage", "kind": "quantity", "units": ["kV","V"], "required": true, "role": "voltage" } ] } ] }
+```
+
+### GET /equipment — the list
+Query filters, all optional: `categoryId`, `type` (`single` / `distribution`), `q` (searches name and subtype), and `metered`, `ready`, `used`, `spare` (each `true` / `false`). Items come back in category order, then by name.
+
+```json
+{ "items": [
+  { "id": "eq_…", "name": "TF-01", "categoryId": "transformer", "categoryName": "Transformer", "type": "single",
+    "subtype": "33/11 kV", "spare": false, "description": null,
+    "values": { "primary_voltage": { "value": 33.0, "unit": "kV" }, "secondary_voltage": { "value": 11.0, "unit": "kV" } },
+    "voltage": { "in": "33 kV", "out": "11 kV", "text": "33 kV → 11 kV" },
+    "readiness": { "ready": false, "missing": ["Rated capacity", "Phase"] },
+    "used": true,
+    "attachedTo": [ { "busId": "bus_…", "busName": "Bus A", "equipmentId": "eq_pcc", "equipmentName": "PCC-01", "role": "incomer" } ],
+    "maxIncomers": 1, "maxOutgoers": 1, "incomingCategories": [], "outgoingCategories": ["lt_panel"],
+    "metering": { "meterCount": 1, "meters": [
+      { "deviceId": "dev_…", "deviceName": "MFM-04", "unitId": 4, "gatewayId": "gw_…", "gatewayName": "GIC-01",
+        "host": "10.90.200.11", "port": 502, "protocol": "modbus", "status": "connected", "role": null } ] },
+    "createdAt": "…Z", "updatedAt": "…Z" },
+  { "id": "eq_pcc", "name": "PCC-01", "categoryId": "lt_panel", "type": "distribution", "subtype": "PCC",
+    "voltage": { "in": "415 V", "out": null, "text": "415 V" }, "readiness": { "ready": true, "missing": [] }, "used": true,
+    "metering": { "points": 20, "pointsMetered": 15, "meterCount": 15, "meters": [ … ] },
+    "buses": [ <bus>, … ], … } ] }
+```
+
+The screen's columns map onto these keys:
+
+| Column | Key |
+|---|---|
+| Element | `name`, plus `categoryName · subtype` |
+| Voltage | `voltage.text` |
+| Metering, single equipment | `metering.meters`, each shown as `deviceName · U{unitId}` / `gatewayName · host`; empty means "No meter attached" |
+| Metering, panels | `metering.pointsMetered / metering.points` points metered · `meterCount` MFMs |
+| Connection readiness | `readiness.ready`, plus `readiness.missing.length` fields missing |
+| Map | `used` |
+| "Spare" tag | `spare` |
+
+`used` currently means the equipment is connected on a bus (attached to one, or a panel with something attached). It will switch to "placed on the map" once the map exists.
+
+### POST /equipment — Add element
+```json
+{ "name": "TF-01", "categoryId": "transformer", "subtype": "33/11 kV", "spare": false, "description": null,
+  "values": { "primary_voltage": { "value": "33", "unit": "kV" } },
+  "maxIncomers": 1, "maxOutgoers": 1, "incomingCategories": ["ht_panel"], "outgoingCategories": ["lt_panel"] }
+```
+- **Required:** `name` (unique, ignoring case; 409 `EQUIPMENT_EXISTS`) and `categoryId`.
+- **Distribution equipment** starts with **Bus A**.
+- **Single equipment** starts with its category's `defaultCapacity`. The last four fields above are optional and apply to single equipment only.
+- **Value errors:**
+  - `FIELD_UNKNOWN`: the field doesn't belong to the category.
+  - `FIELD_INVALID`: not a number ≥ 0, a unit that isn't allowed, a choice that isn't in the options, or text that isn't a string.
+  - `VALUES_INVALID`: `values` isn't an object.
+
+### GET /equipment/{id} · PUT /equipment/{id} · DELETE /equipment/{id}
+**PUT** (the edit panel) accepts any of `name`, `categoryId`, `subtype`, `spare`, `description` and `values`. For single equipment it also accepts `maxIncomers`, `maxOutgoers`, `incomingCategories` and `outgoingCategories`.
+- **`values` is a merge:** only the fields you send change, and `null` or an empty value clears one.
+- **`categoryId`:** can only change to a category of the same type (`CATEGORY_TYPE_CHANGE`). Values of fields the new category doesn't have are dropped.
+- **Capacity and category changes are checked against current connections:**
+  - 409 `CAPACITY_BELOW_ATTACHED`: the new capacity is below the number already connected.
+  - 409 `ATTACHED_OUTSIDE_CATEGORIES`: the new categories exclude something already connected.
+  - 409 `CATEGORY_NOT_ALLOWED_ON_BUS`: the equipment is attached to a bus that doesn't allow the new category.
+
+**DELETE** returns 409 `EQUIPMENT_IN_USE` while the equipment is attached to a bus. Otherwise it also removes its buses, their attachments and its MFM links; the devices and the attached equipment are kept.
+
+### Buses (distribution equipment) — "Bus sections", "Bus section A / B", "Bus Coupling"
+
+| Call | Body | Notes |
+|---|---|---|
+| `GET /equipment/{id}/buses` | — | 400 `BUSES_NOT_ALLOWED` on single equipment |
+| `PUT /equipment/{id}/buses/count` | `{ "count": 2 }` | The "Bus sections" selector (1–26). Adds Bus A, B, C… at the end, or removes trailing buses; a bus with equipment or MFMs on it is never removed (409 `BUS_NOT_EMPTY`). The new last bus's coupler is cleared |
+| `POST /equipment/{id}/buses` | `{ "name"?, "incomers"?, "outgoers"?, "incomingCategories"?, "outgoingCategories"? }` | Adds one bus |
+| `PUT /equipment/buses/{busId}` | `{ "name"?, "sortOrder"?, "incomers"?, "outgoers"?, "coupledNext"?, "incomingCategories"?, "outgoingCategories"? }` | `incomers` = "Maximum incomers" and `outgoers` = "Outgoing feeder capacity" (0–999). `coupledNext: true` couples this bus with the next one ("Section A ↔ Section B"); the last bus can't be coupled (400 `NO_NEXT_BUS`). The checks match equipment PUT, plus 409 `CAPACITY_BELOW_METERED` |
+| `DELETE /equipment/buses/{busId}` | — | 409 `LAST_BUS` or `BUS_NOT_EMPTY` |
+
+Bus object:
+```json
+{ "id": "bus_…", "equipmentId": "eq_pcc", "name": "Bus A", "sortOrder": 0, "incomers": 1, "outgoers": 9, "coupledNext": true,
+  "incomingCategories": ["transformer"], "outgoingCategories": ["lt_panel", "load"],
+  "incomingEquipment": [ { "id": "eq_tf", "name": "TF-01", "categoryId": "transformer", "categoryName": "Transformer", "type": "single" } ],
+  "outgoingEquipment": [ … ], "spareIncomers": 0, "spareOutgoers": 7,
+  "meters": [ { "deviceId": "dev_…", "deviceName": "MFM-04", "unitId": 4, "gatewayName": "GIC-01", "host": "10.90.200.11", "role": "incomer", … } ],
+  "points": 10, "pointsMetered": 8 }
+```
+
+### Connecting equipment to buses
+`POST /equipment/buses/{busId}/equipment` with `{ "equipmentId": "eq_…", "role": "incomer" | "outgoer" }`, and `DELETE /equipment/buses/{busId}/equipment/{equipmentId}`. Both return the bus.
+
+The attach checks run in this order:
+1. **Duplicates:** the equipment is already on this bus (409 `ALREADY_ATTACHED`).
+2. **The bus side:**
+   - its allowed categories (400 `CATEGORY_NOT_ALLOWED: Bus A …`);
+   - a spare place on that side (409 `NO_SPARE`).
+3. **The equipment's own side, if it is single equipment:**
+   - feeding the bus (as an `incomer`) uses its **outgoing** side, and being fed (as an `outgoer`) uses its **incoming** side;
+   - that side's allowed categories (400 `CATEGORY_NOT_ALLOWED: <name> …`);
+   - that side's capacity (409 `NO_SPARE: <name> allows n …`). A Load has 0 outgoing by default, so it can't feed a bus.
+4. **Self:** a panel can't be attached to its own bus (400 `SELF_ATTACH`).
+5. **Loops:** 400 `CYCLE`.
+
+### MFMs
+
+| Call | Body | For |
+|---|---|---|
+| `POST /equipment/{id}/meters` | `{ "deviceId": "dev_…" }` | **Single** equipment: several MFMs on the equipment itself. On a distribution panel this returns 400 `USE_BUS_METERS` |
+| `POST /equipment/buses/{busId}/meters` | `{ "deviceId": "dev_…", "role": "incomer" \| "outgoer" }` | **Distribution** panels: the MFM meters an incomer or outgoer point of that bus. At most as many per side as its capacity (409 `NO_FREE_POINT`) |
+| `DELETE /equipment/{id}/meters/{deviceId}` · `DELETE /equipment/buses/{busId}/meters/{deviceId}` | — | Detach (404 `METER_NOT_ATTACHED`) |
+| `GET /equipment/{id}/meters` | — | All MFMs of the equipment, including those on its buses |
+| `GET /equipment/available_meters` | — | Devices not attached anywhere, with `unitId`, `gatewayName`, `host` |
+
+A device is on one place only (409 `METER_IN_USE: attached to <where>`). `DELETE /devices/{id}` on an attached device returns 409 `DEVICE_ATTACHED_TO_EQUIPMENT`.
+
+### Versions (If-Match)
+- **The field:** every equipment has an integer `version` (and buses return `equipmentVersion`).
+- **What bumps it:** any change to the equipment, its buses, rules, connections or meters. A connection change bumps both ends.
+- **Writes:** every write route accepts `If-Match: <version>` of the equipment that owns what is being changed. A stale version answers 409 `VERSION_CONFLICT: <id>`; a non-integer one, 400 `IF_MATCH_INVALID`. Without the header, the last write wins.
+- **Responses:** attach, detach, reorder and direct-link routes return both changed objects: `{"success": true, "item": <bus>, "owner": <equipment>, "attached": <equipment>}` (`item` only on bus routes).
+
+### Feeder order
+- **Positions:** every connection has a `position` (0-based, compact per node and side), shown on `incomingEquipment[]` / `outgoingEquipment[]` and `attachedTo[]`.
+- **Attaching:** `POST /equipment/buses/{busId}/equipment` accepts an optional `position`.
+- **Reordering:** `PUT /equipment/buses/{busId}/equipment/{equipmentId}` with `{"position": n}`.
+- **Detaching:** a detach renumbers the rest.
+
+### Bus meters naming their feeder
+`POST /equipment/buses/{busId}/meters` accepts an optional `equipmentId`, the attached equipment the meter measures. It must sit on that bus on the same side (400 `FEEDER_NOT_ON_BUS`). It's returned as `meters[].equipmentId`, and set back to `null` if that feeder is detached.
+
+### Direct links (single → single)
+
+| Call | Body | Notes |
+|---|---|---|
+| `POST /equipment/{sourceId}/connections` | `{ "equipmentId": "<target>", "position"? }` | The source feeds the target (e.g. Grid → TF). Both must be single equipment (400 `USE_BUS` otherwise). It checks the source's outgoing side and the target's incoming side (categories, capacity), plus `ALREADY_ATTACHED`, `SELF_ATTACH` and `CYCLE` |
+| `PUT /equipment/{sourceId}/connections/{targetId}` | `{ "position": n }` | Reorder |
+| `DELETE /equipment/{sourceId}/connections/{targetId}` | — | Remove the link |
+
+- **In responses:** the source lists its direct links in `outgoingEquipment[]`. The target's `attachedTo[]` includes `{"equipmentId": <source>, "role": "outgoer", "direct": true, "busId": null, "busName": null, "position": n}`.
+- **Deleting:** deleting a target answers 409 `EQUIPMENT_IN_USE` while it is fed. Deleting a source removes its links.
+- **Loops:** checked in flow direction across bus attachments and direct links. A bus incomer feeds the panel, a bus outgoer is fed by the panel, and a direct link goes from source to target.
+
+**Not covered yet:** Import / Export (Excel), View / Upload Nameplate, View in map, and the map itself.
+
+### Schema, device and job additions (2026-10-23)
+
+| Route | Change |
+|---|---|
+| `GET /schemas/field_types` | DB-managed list of field `type` words: `{"items": [{id, label, encoding}]}`. `encoding` is the register decoding used for mapping rows (e.g. `real` → `float32`, `boolean` → `bool16`). Edited in the DB (`app_field_type`) |
+| `GET /schemas/units` | DB-managed list of field units (`app_field_unit`). A field `unit` must be in it or empty (400 `UNIT_INVALID`) |
+| `GET /schemas/{id}` | One schema, with `description` |
+| `PATCH /schemas/{id}` | `{name?, description?}`. A duplicate name (ignoring case) is 409 `SCHEMA_EXISTS` |
+| `POST /schemas` | Accepts `description`. Field types and units are validated against the two lists above |
+| `PUT /devices/{id}` | Also applies `protocol` and `params` (merged; `null` removes a key; `"***"` keeps a stored secret), and `gatewayId: null`. An address change resets `status` to `disconnected` and clears `verification` |
+| `GET /devices` | Each device has `verification: {ok, latencyMs, error, at}` or `null` |
+| `POST /devices/{id}/quick_test` | Saves the result; the response includes `verification` |
+| `GET /jobs2/{id}` | One job |
+| `PATCH /jobs2/{id}` | `name`, `tables`, `intervalMs`, `enabled`, `cpuBudget`, `type`, `triggers`. 409 `JOB_RUNNING` while the job is running |
+| `POST /jobs2/{id}/resume` | Only from `paused` (409 `JOB_NOT_PAUSED`). Sets the job back to running |
+
+---
+
+## 25. Alerts on Readings
+
+Alert rules work like scales and units: the **schema** holds the blueprint, every **table** of that schema inherits it, and a table can override a rule.
+
+**Model**
+- **Levels** (`app_alert`): `Critical` (severity 3), `Mild` (2) and `Info` (1) are created once at first boot. Users can add, rename or delete levels after that; deleted levels are not re-created. A higher severity means worse.
+- **Schema rule** (`app_schema_alert`): `field op threshold` for one schema field and one level. A field can have one rule per level. `op` is one of `> >= < <= == !=`. Only numeric fields are allowed.
+- **Table override** (`app_table_alert`): for the same (field, level), the table can use a different op/threshold, or set `enabled: false` to switch the inherited rule off. A table can also add its own rule (one with no schema rule behind it); that rule needs both op and threshold.
+- **State and events** (`app_alert_state`, `app_alert_event`): written by the Rust engine.
+  - Each table field has one state: normal, or the **most severe** level whose rule matches the latest reading.
+  - The engine writes only when the state *changes*. Each change is one event, plus one notification of type `alert`.
+  - Missing or non-numeric readings leave the state unchanged. There is no deadband.
+- Rules are loaded when a job starts. **Edits take effect at the next job (re)start.**
+
+**Endpoints** (reads need `logger-read`, writes need `logger-write`)
+
+| Method | Path | Body / query | Notes |
+|---|---|---|---|
+| GET | `/alerts/levels` | — | ordered by severity, highest first |
+| POST | `/alerts/levels` | `{name, severity?, color?}` | 409 `ALERT_LEVEL_EXISTS` (names compared case-insensitively) |
+| PUT | `/alerts/levels/{id}` | `{name?, severity?, color?, sortOrder?}` | |
+| DELETE | `/alerts/levels/{id}` | — | 409 `ALERT_LEVEL_IN_USE` while rules or active states use the level |
+| GET | `/schemas/{id}/alerts` | — | schema rules (blueprint) |
+| POST | `/schemas/{id}/alerts` | `{fieldKey, alertId, op, threshold}` | 400 `FIELD_UNKNOWN` / `FIELD_NOT_NUMERIC`; 409 `ALERT_RULE_EXISTS` |
+| PUT | `/schemas/{id}/alerts/{ruleId}` | `{op?, threshold?}` | `fieldKey`/`alertId` can't change (`FIELD_IMMUTABLE`) |
+| DELETE | `/schemas/{id}/alerts/{ruleId}` | — | |
+| GET | `/tables/{id}/alerts` | — | effective rules (schema rules merged with the table's overrides) |
+| PUT | `/tables/{id}/alerts` | `{fieldKey, alertId, op?, threshold?, enabled?}` | upserts the override; 400 `RULE_REQUIRED` for a table-only rule without op+threshold |
+| DELETE | `/tables/{id}/alerts/{overrideId}` | — | falls back to the schema rule |
+| GET | `/alerts/active` | `?tableId=` | current non-normal states |
+| GET | `/alerts/events` | `?tableId=&frm=&to=&limit=` | history, newest first; `limit` ≤ 1000 (default 200) |
+
+Each item from `GET /tables/{id}/alerts` has a `source`:
+- `schema`: inherited unchanged.
+- `overridden`: the table changed op/threshold.
+- `table`: a table-only rule.
+- `disabled`: the inherited rule is switched off.
+
+Each item also carries `schemaRuleId`, `overrideId` and `enabled`.
+
+```json
+{"tableId": "tbl_1", "items": [
+  {"fieldKey": "voltage_l1", "alertId": "critical", "alertName": "Critical", "severity": 3, "color": "#b42318",
+   "op": ">", "threshold": 260.0, "unit": "V", "source": "overridden", "schemaRuleId": "sar_…", "overrideId": "tar_…", "enabled": true}
+]}
+```
+
+Event item:
+```json
+{"id": "ae_…", "tableId": "tbl_1", "tableName": "panel_a", "fieldKey": "voltage_l1",
+ "from": null, "to": {"alertId": "critical", "alertName": "Critical"},
+ "value": 262.4, "op": ">", "threshold": 260.0, "jobId": "job_…", "at": "2026-10-25T09:12:03Z"}
+```
+`to: null` means the field returned to normal; `from: null` means it was normal before.
+
+**Cleanup**
+- Deleting a table removes its overrides and state.
+- Deleting a schema removes its rules.
+- Deleting a schema field removes the rules, overrides and states for that field.
+- Event history is always kept.
+
+---
+
+## 26. Electrical: hierarchy and MFM slots (2026-10-26)
+
+- **Hierarchy:** `app_equipment_group` (EMS, Source, BMS; seeded and DB-managed) → `app_equipment_category.group_id` → equipment. `GET /equipment/groups` returns the tree. Categories and equipment items carry `groupId` and `groupName`, and `GET /equipment` takes `?groupId=`.
+- **Bus MFMs sit in a relation's slot** (`equipmentId` = the attached incomer or outgoer they measure), with one MFM per relation.
+  - Incoming MFMs require `equipmentId`.
+  - An outgoing MFM without one is a **spare** and takes an outgoing point.
+- **Disconnecting a metered outgoer** turns its MFM into a spare. **Detaching a metered incomer** gives 409 `RELATION_METERED`.
+- **New:**
+  - `PUT /equipment/buses/{busId}/meters/{deviceId} {equipmentId|null}` re-slots an MFM;
+  - `spareDeviceId` on `POST /equipment/buses/{busId}/equipment` connects a feeder at a spare's point.
+- **Bus response:** relation entries have `meter`; the bus has `spares` and `spareMeters`; `spareOutgoers` = free points.
+
+Full details, error codes and examples: `Logger-v2-backend-mapping.md` §13.
+
+---
+
+## 27. Elements: category + kind + type (2026-10-27, breaking)
+
+- **Category** = EMS / Source / BMS (`GET /equipment/categories` → `{id, name, sortOrder, kinds}`).
+- **Kind** = `single` | `distribution`, chosen per element and fixed (`KIND_IMMUTABLE`).
+- **Type** = user-defined, in one global list, with nameplate fields:
+  - `GET` / `POST /equipment/types`, `PUT` / `DELETE /equipment/types/{id}`;
+  - `TYPE_IN_USE`, `TYPE_EXISTS`, `FIELDS_INVALID`.
+- **Elements:**
+  - `POST /equipment {name, categoryId, kind, typeId?, values?}`; the type is optional, and `subtype` is removed;
+  - filters: `categoryId`, `kind`, `typeId`;
+  - bus and node rules: `incomingTypes` / `outgoingTypes`; codes `TYPE_NOT_ALLOWED`, `TYPE_NOT_ALLOWED_ON_BUS`, `ATTACHED_OUTSIDE_TYPES`.
+- **Removed:** `/equipment/groups`.
+
+The full old → new table is in `Logger-v2-backend-mapping.md` §14. §26 (groups) is superseded.
+
+---
+
+## 28. EMS elements from a spreadsheet (2026-10-27)
+
+- `GET /equipment/import/ems/template` returns an `.xlsx` with the Elements / Buses / Connections sheets and a Types reference sheet.
+- `POST /equipment/import/ems` takes a multipart `file` (`.xlsx` or `.csv`, ≤ 5 MB) and an optional `?dryRun=true`.
+  - Elements are created in EMS; existing names are updated.
+  - Buses and connections are upserted, and nothing is deleted.
+  - It's all or nothing: an error returns 400 `IMPORT_INVALID` with a per-row report, and nothing is saved.
+- New dependencies: `python-multipart`, `openpyxl` (requirements.txt).
+
+Details: `Logger-v2-backend-mapping.md` §15.
+
+---
+
+## 29. Zones and EMS export (2026-10-27)
+
+- **Zones:** `GET` / `POST /equipment/zones`, `PUT` / `DELETE /equipment/zones/{id}` (`ZONE_EXISTS`, `ZONE_IN_USE`). Elements carry `zoneId` / `zoneName`; filter with `?zoneId=`. The import has a `zone` column and panel-level `incoming types` / `outgoing types`, which apply to every bus.
+- **Export:** `GET /equipment/export/ems?typeId=` returns an `.xlsx` in the plant template's layout: a sheet per type with REQUIRED / NAMEPLATE groups, Bus Sections, and Lists.
+
+Details: mapping doc §15.3 and §16.
+
+---
+
+## 30. MFMs are logger tables (2026-10-27, breaking)
+
+An MFM slot holds a logger **table**; its device and schema come from the table.
+- **Meter calls:** use `tableId` (path and body), and `spareTableId` on attach.
+- **`available_meters`** lists unplaced tables.
+- **MFM objects** carry `tableId`, `tableName`, `schemaId`, `schemaName`, `deviceId`, `deviceName`, …
+- **Deletes refused while placed:** a table that is an MFM (`TABLE_ATTACHED_TO_EQUIPMENT`) and its device (`DEVICE_ATTACHED_TO_EQUIPMENT`) can't be deleted.
+- **EMS import:** gains a Meters sheet (`table` | `MFM`, `element`, `bus`, `role`, `measures`, `schema`).
+
+Details: mapping doc §17.

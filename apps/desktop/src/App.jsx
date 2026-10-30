@@ -6,6 +6,7 @@ import { Networking } from "./pages/Networking/index.jsx";
 import { Toast } from "./components";
 import { TablesMapping } from "./pages/TablesMapping/index.jsx";
 import { LoggingSchedules } from "./pages/LoggingSchedules/index.jsx";
+import { Equipment } from "./pages/Equipment/index.jsx";
 
 function a11yProps(name) {
   return {
@@ -29,7 +30,7 @@ function TabPanel({ current, name, children, labelledBy }) {
 }
 
 export default function App() {
-  const [tab, setTab] = useState("networking");
+  const [tab, setTab] = useState("equipment");
   const { state } = useApp();
   const gateOK = selectGateSatisfied(state);
 
@@ -76,6 +77,11 @@ export default function App() {
           }}
         >
           <Tab
+            label="Equipment"
+            value="equipment"
+            {...a11yProps("equipment")}
+          />
+          <Tab
             label="Networking"
             value="networking"
             {...a11yProps("networking")}
@@ -102,6 +108,10 @@ export default function App() {
             bgcolor: "background.paper",
           }}
         >
+          <TabPanel current={tab} name="equipment">
+            <Equipment />
+          </TabPanel>
+
           <TabPanel current={tab} name="networking">
             <Networking onProceed={() => setTab("tables")} />
           </TabPanel>

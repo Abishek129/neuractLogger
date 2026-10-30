@@ -27,6 +27,8 @@ from .routers import notifications as notifications_router
 from .routers import ws_notifications as ws_notifications_router
 from .routers import protocol_types as protocol_types_router
 from .routers import bulk_import as bulk_import_router
+from .routers import equipment as equipment_router
+from .routers import alerts as alerts_router
 from fastapi import Depends
 from .permissions import require_logger_write, require_safe_or_write
 from .store import Store
@@ -176,15 +178,16 @@ def create_app() -> FastAPI:
     # Public routers (no auth — matches Django AllowAny)
     app.include_router(health.router)
     app.include_router(auth_router.router)
-    app.include_router(schemas.router)
-    app.include_router(tables_router.router)
-    app.include_router(devices_router.router)
     app.include_router(protocol_types_router.router)
     app.include_router(bulk_import_router.router)
-    # Unprotected legacy router
-    app.include_router(jobs2.router)
-    # Protected routers (Keycloak JWT + role-based)
+    # Protected routers (Keycloak JWT + role-based). schemas, tables, devices
+    # and jobs2 used to allow GETs without a token (their writes were already
+    # guarded per endpoint); every read now needs logger-read as well.
     _protected = [
+        schemas.router,
+        tables_router.router,
+        devices_router.router,
+        jobs2.router,
         jobs.router,
         networking.router,
         storage.router,
@@ -193,6 +196,8 @@ def create_app() -> FastAPI:
         db_metrics_router.router,
         reports_router.router,
         debug_router.router,
+        equipment_router.router,
+        alerts_router.router,
     ]
     for r in _protected:
         app.include_router(r, dependencies=[Depends(require_safe_or_write)])
@@ -213,6 +218,12 @@ def create_app() -> FastAPI:
         boot_log.info("AI pipeline ENABLED (LOGGER_ENABLE_AI=1)")
     else:
         boot_log.info("AI pipeline disabled (set LOGGER_ENABLE_AI=1 to enable)")
+    from .permissions import auth_disabled
+    if auth_disabled():
+        boot_log.warning(
+            "AUTH DISABLED (LOGGER_AUTH_DISABLED=1): every request is treated as an admin. "
+            "Local demo only; never use in production."
+        )
     # Align DPAPI scope: rekey secrets under current context (machine scope for service)
     try:
         from .appdb import rekey_all_device_params as _rekey

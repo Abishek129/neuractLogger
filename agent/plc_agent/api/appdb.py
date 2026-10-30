@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 from contextlib import contextmanager
@@ -170,6 +171,7 @@ def init() -> None:
                 """
             )
         )
+        _ensure_column(c, "app_schemas", "description", "TEXT")
         c.execute(
             text(
                 """
@@ -438,11 +440,633 @@ def init() -> None:
                 """
             )
         )
+    _init_equipment()
+    _init_schema_vocab()
+    _init_device_verification()
+    _init_alerts()
+
+
+# ---------- Schema field types + units (DB-managed lists) ----------
+# app_field_type: the words a schema field's `type` may use. `encoding` is the
+#   register decoding the Rust engine understands (float32, int16, ...); the
+#   mapping row's encoding is taken from here, so a word like "REAL" decodes
+#   as float32 instead of falling back to one u16 register.
+# app_field_unit: the units a schema field may use.
+# Both are seed data, edited directly in the DB (no write endpoints).
+FIELD_ENCODINGS = ("float32", "float64", "uint16", "uint16_enum", "int16", "uint32", "int32", "uint64", "int64", "bool16")
+_FIELD_TYPE_SEED = [
+    # id (case-insensitive word), label, encoding, sort
+    ("float32", "Float 32-bit", "float32", 1),
+    ("float", "Float (32-bit)", "float32", 2),
+    ("float64", "Float 64-bit", "float64", 3),
+    ("int16", "Integer 16-bit", "int16", 4),
+    ("uint16", "Unsigned 16-bit", "uint16", 5),
+    ("uint16_enum", "Enum (unsigned 16-bit)", "uint16_enum", 6),
+    ("int32", "Integer 32-bit", "int32", 7),
+    ("uint32", "Unsigned 32-bit", "uint32", 8),
+    ("int64", "Integer 64-bit", "int64", 9),
+    ("uint64", "Unsigned 64-bit", "uint64", 10),
+    ("bool16", "Boolean (16-bit register)", "bool16", 11),
+    # Words found in stored schemas (older imports).
+    ("real", "REAL (32-bit float)", "float32", 20),
+    ("boolean", "Boolean", "bool16", 21),
+]
+_FIELD_UNIT_SEED = [
+    "V", "kV", "A", "kA", "W", "kW", "MW", "VA", "kVA", "MVA", "var", "kvar", "Mvar",
+    "Wh", "kWh", "MWh", "varh", "kvarh", "VAh", "kVAh", "Hz", "%", "°C", "°F",
+    "bar", "kPa", "Pa", "m3/h", "l/s", "rpm", "s", "min", "h",
+]
+
+
+def _init_schema_vocab() -> None:
+    with _conn() as c:
+        c.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS app_field_type (
+                    id TEXT PRIMARY KEY,
+                    label TEXT NOT NULL,
+                    encoding TEXT NOT NULL,
+                    sort_order INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+        )
+        c.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS app_field_unit (
+                    id TEXT PRIMARY KEY,
+                    label TEXT,
+                    sort_order INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+        )
+        for tid, label, enc, order in _FIELD_TYPE_SEED:
+            c.execute(
+                text(_upsert_sql("app_field_type", ["id", "label", "encoding", "sort_order"], ["id"], [])),
+                {"id": tid, "label": label, "encoding": enc, "sort_order": order},
+            )
+        # Units: the common set plus every unit already used by a stored field,
+        # so existing schemas stay editable.
+        used = [r[0] for r in c.execute(text("SELECT DISTINCT unit FROM app_schema_fields WHERE unit IS NOT NULL AND unit <> ''")).fetchall()]
+        for i, u in enumerate(list(dict.fromkeys(_FIELD_UNIT_SEED + used))):
+            c.execute(
+                text(_upsert_sql("app_field_unit", ["id", "label", "sort_order"], ["id"], [])),
+                {"id": u, "label": u, "sort_order": i + 1},
+            )
+        # Any stored type word missing from the list is added (decoding fallback
+        # float32, the engine's numeric default) so no schema becomes uneditable.
+        known = {r[0] for r in c.execute(text("SELECT id FROM app_field_type")).fetchall()}
+        for (word,) in c.execute(text("SELECT DISTINCT lower(type) FROM app_schema_fields WHERE type IS NOT NULL")).fetchall():
+            if word and word not in known:
+                c.execute(
+                    text(_upsert_sql("app_field_type", ["id", "label", "encoding", "sort_order"], ["id"], [])),
+                    {"id": word, "label": word, "encoding": "float32", "sort_order": 99},
+                )
+
+
+def load_field_types() -> List[Dict[str, Any]]:
+    with _conn() as c:
+        return _fetchall(c, "SELECT id, label, encoding, sort_order FROM app_field_type ORDER BY sort_order, id")
+
+
+def load_field_units() -> List[Dict[str, Any]]:
+    with _conn() as c:
+        return _fetchall(c, "SELECT id, label, sort_order FROM app_field_unit ORDER BY sort_order, id")
+
+
+# ---------- Alerts on readings ----------
+# app_alert: alert levels (user-managed; seeded Critical / Mild / Info).
+# app_schema_alert: the blueprint — a rule on a schema field that applies to
+#   every table of that schema.
+# app_table_alert: per-table override of a rule for the same field + level
+#   (enabled = 0 switches the inherited rule off for that table).
+# app_alert_state: the current non-normal state per table field (written by
+#   the Rust engine on state change).
+# app_alert_event: one row per state change (written by the Rust engine).
+ALERT_OPS = (">", ">=", "<", "<=", "==", "!=")
+_ALERT_LEVEL_SEED = [
+    # id, name, severity, color, sort
+    ("critical", "Critical", 3, "#b42318", 1),
+    ("mild", "Mild", 2, "#b54708", 2),
+    ("info", "Info", 1, "#175cd3", 3),
+]
+
+
+def _init_alerts() -> None:
+    ddl = [
+        """
+        CREATE TABLE IF NOT EXISTS app_alert (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            severity INTEGER NOT NULL DEFAULT 1,
+            color TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_alert_name ON app_alert (lower(name))",
+        """
+        CREATE TABLE IF NOT EXISTS app_schema_alert (
+            id TEXT PRIMARY KEY,
+            schema_id TEXT NOT NULL,
+            field_key TEXT NOT NULL,
+            alert_id TEXT NOT NULL,
+            op TEXT NOT NULL CHECK (op IN ('>', '>=', '<', '<=', '==', '!=')),
+            threshold DOUBLE PRECISION NOT NULL
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_schema_alert ON app_schema_alert (schema_id, field_key, alert_id)",
+        """
+        CREATE TABLE IF NOT EXISTS app_table_alert (
+            id TEXT PRIMARY KEY,
+            table_id TEXT NOT NULL,
+            field_key TEXT NOT NULL,
+            alert_id TEXT NOT NULL,
+            op TEXT CHECK (op IS NULL OR op IN ('>', '>=', '<', '<=', '==', '!=')),
+            threshold DOUBLE PRECISION,
+            enabled INTEGER NOT NULL DEFAULT 1
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_table_alert ON app_table_alert (table_id, field_key, alert_id)",
+        """
+        CREATE TABLE IF NOT EXISTS app_alert_state (
+            table_id TEXT NOT NULL,
+            field_key TEXT NOT NULL,
+            alert_id TEXT NOT NULL,
+            value DOUBLE PRECISION,
+            since TEXT NOT NULL,
+            PRIMARY KEY (table_id, field_key)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS app_alert_event (
+            id TEXT PRIMARY KEY,
+            table_id TEXT NOT NULL,
+            field_key TEXT NOT NULL,
+            from_alert_id TEXT,
+            to_alert_id TEXT,
+            value DOUBLE PRECISION,
+            op TEXT,
+            threshold DOUBLE PRECISION,
+            job_id TEXT,
+            at TEXT NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_alert_event_table_at ON app_alert_event (table_id, at)",
+    ]
+    with _conn() as c:
+        for stmt in ddl:
+            c.execute(text(stmt))
+        # Seed the default levels once (a level the user deletes must not come back).
+        seeded = _fetchone(c, "SELECT value FROM app_meta WHERE key='alert_levels_seeded'")
+        if not seeded:
+            for aid, name, sev, color, order in _ALERT_LEVEL_SEED:
+                c.execute(
+                    text(_upsert_sql("app_alert", ["id", "name", "severity", "color", "sort_order"], ["id"], [])),
+                    {"id": aid, "name": name, "severity": sev, "color": color, "sort_order": order},
+                )
+            c.execute(
+                text(_upsert_sql("app_meta", ["key", "value"], ["key"])),
+                {"key": "alert_levels_seeded", "value": "1"},
+            )
+
+
+# ---------- Device verification results (last quick_test per device) ----------
+def _init_device_verification() -> None:
+    with _conn() as c:
+        c.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS app_device_verification (
+                    device_id TEXT PRIMARY KEY,
+                    ok INTEGER NOT NULL,
+                    latency_ms INTEGER,
+                    error TEXT,
+                    at TEXT NOT NULL
+                )
+                """
+            )
+        )
+
+
+def save_device_verification(device_id: str, ok: bool, latency_ms: Optional[int], error: Optional[str], at: str) -> None:
+    with _conn() as c:
+        c.execute(
+            text(_upsert_sql("app_device_verification", ["device_id", "ok", "latency_ms", "error", "at"], ["device_id"])),
+            {"device_id": device_id, "ok": 1 if ok else 0, "latency_ms": latency_ms, "error": error, "at": at},
+        )
+
+
+def clear_device_verification(device_id: str) -> None:
+    with _conn() as c:
+        c.execute(text("DELETE FROM app_device_verification WHERE device_id=:d"), {"d": device_id})
+
+
+def load_device_verifications() -> Dict[str, Dict[str, Any]]:
+    with _conn() as c:
+        rows = _fetchall(c, "SELECT device_id, ok, latency_ms, error, at FROM app_device_verification")
+    return {
+        r["device_id"]: {"ok": bool(r["ok"]), "latencyMs": r["latency_ms"], "error": r["error"], "at": r["at"]}
+        for r in rows
+    }
+
+
+# ---------- Electrical equipment ----------
+# An element (app_equipment) = category + kind + optional type:
+# app_equipment_category: EMS / Source / BMS (seed data, edited in the DB).
+#   `kinds_json` = the kinds its elements may have (EMS: single and
+#   distribution; Source / BMS: none until decided).
+# app_equipment.kind: "single" (MFMs directly, a hidden main node) or
+#   "distribution" (buses). Fixed at create.
+# app_equipment_type: user-defined types (Load, HT Panel, Transformer, ...),
+#   one global list; `config_json` = its nameplate field definitions and the
+#   default capacity of a single element's main node. The built-in five are
+#   seeded once (types a user deletes do not come back).
+# app_equipment_zone: user-managed zones (North, Production Block A, ...);
+#   an element may sit in one (app_equipment.zone_id).
+# app_bus: the connection nodes. Distribution elements have 1..N buses;
+#   single elements have exactly one hidden "main" node (is_main = 1). A node
+#   has incomer / outgoer capacity.
+# app_bus_type: the types allowed on a node's incoming / outgoing side.
+# app_bus_equipment: elements attached to a node as incomer / outgoer, in
+#   order (sort_order = position). On a single element's main node, an
+#   outgoer row is a direct link (that element feeds the attached one).
+# app_bus_meter: MFMs on a node. An MFM is a logger table (where its readings
+#   are written; its device and schema come from the table); a table is on
+#   one node only. On a bus each MFM sits in a relation's slot (equipment_id = the attached
+#   incomer / outgoer it measures, one MFM per relation) or, outgoing only,
+#   with no relation: a spare.
+EQUIPMENT_KINDS = ("single", "distribution")
+_EQUIPMENT_CATEGORY_SEED = [
+    # id, name, sort_order, allowed kinds
+    ("ems", "EMS", 1, ["single", "distribution"]),
+    ("source", "Source", 2, []),
+    ("bms", "BMS", 3, []),
+]
+_V = ["kV", "V"]
+_FIELD_VOLTAGE_IN = {"id": "voltage", "label": "Voltage", "kind": "quantity", "units": _V, "required": True}
+_EQUIPMENT_TYPE_SEED = [
+    # id, name, sort_order, config
+    ("source", "Source", 1, {
+        "fields": [
+            {"id": "voltage", "label": "Voltage", "kind": "quantity", "units": _V, "required": True, "role": "voltage.out"},
+            {"id": "rated_power", "label": "Rated power", "kind": "quantity", "units": ["kVA", "MVA", "kW", "MW"]},
+            {"id": "phase", "label": "Phase", "kind": "choice", "options": ["3 Phase", "1 Phase"]},
+        ],
+        "node": {"incomers": 0, "outgoers": 1},
+    }),
+    ("transformer", "Transformer", 2, {
+        "fields": [
+            {"id": "primary_voltage", "label": "Primary voltage", "kind": "quantity", "units": _V, "required": True, "role": "voltage.in"},
+            {"id": "secondary_voltage", "label": "Secondary voltage", "kind": "quantity", "units": _V, "required": True, "role": "voltage.out"},
+            {"id": "rated_capacity", "label": "Rated capacity", "kind": "quantity", "units": ["kVA", "MVA"], "required": True},
+            {"id": "phase", "label": "Phase", "kind": "choice", "options": ["3 Phase", "1 Phase"], "required": True},
+        ],
+        "node": {"incomers": 1, "outgoers": 1},
+    }),
+    ("ht_panel", "HT Panel", 3, {
+        "fields": [
+            {"id": "bus_voltage", "label": "Bus / operating voltage", "kind": "quantity", "units": _V, "required": True, "role": "voltage"},
+        ],
+    }),
+    ("lt_panel", "LT Panel", 4, {
+        "fields": [
+            {"id": "bus_voltage", "label": "Bus / operating voltage", "kind": "quantity", "units": _V, "required": True, "role": "voltage"},
+        ],
+    }),
+    ("load", "Load", 5, {
+        "fields": [
+            {"id": "supply_voltage", "label": "Supply voltage", "kind": "quantity", "units": ["V", "kV"], "required": True, "role": "voltage.in"},
+            {"id": "phase", "label": "Phase", "kind": "choice", "options": ["3 Phase", "1 Phase"], "required": True},
+            {"id": "rated_power", "label": "Rated power", "kind": "quantity", "units": ["kW", "MW"]},
+            {"id": "rated_current", "label": "Rated current", "kind": "quantity", "units": ["A"]},
+        ],
+        "node": {"incomers": 1, "outgoers": 0},
+    }),
+]
+# Tables of earlier equipment models, replaced by the ones above.
+_OLD_EQUIPMENT_TABLES = [
+    "app_equipment_map_links",
+    "app_equipment_map_nodes",
+    "app_equipment_bus_positions",
+    "app_equipment_bus_members",
+    "app_equipment_buses",
+    "app_equipment_devices",
+    "app_equipment_nav_categories",
+    "app_equipment_types",
+    "app_equipment_categories",
+    "app_equipment_meter",
+]
+_EQUIPMENT_FKS = [
+    ("fk_element_category", "app_equipment", "category_id", "app_equipment_category(id)", ""),
+    ("fk_element_type", "app_equipment", "type_id", "app_equipment_type(id)", ""),
+    ("fk_element_zone", "app_equipment", "zone_id", "app_equipment_zone(id)", ""),
+    ("fk_bus_equipment", "app_bus", "equipment_id", "app_equipment(id)", "ON DELETE CASCADE"),
+    ("fk_bus_type_bus", "app_bus_type", "bus_id", "app_bus(id)", "ON DELETE CASCADE"),
+    ("fk_bus_type_type", "app_bus_type", "type_id", "app_equipment_type(id)", ""),
+    ("fk_bus_equipment_bus", "app_bus_equipment", "bus_id", "app_bus(id)", "ON DELETE CASCADE"),
+    ("fk_bus_equipment_equipment", "app_bus_equipment", "equipment_id", "app_equipment(id)", ""),
+    ("fk_bus_meter_bus", "app_bus_meter", "bus_id", "app_bus(id)", "ON DELETE CASCADE"),
+    ("fk_bus_meter_table", "app_bus_meter", "table_id", "app_device_tables(id)", ""),
+]
+
+
+def _drop_old_equipment_model(c) -> None:
+    """One-time removal of earlier equipment models (idempotent)."""
+    cascade = " CASCADE" if _dialect_name() == "postgresql" else ""
+    if "nav_category_id" in _column_names(c, "app_equipment"):
+        c.execute(text(f"DROP TABLE app_equipment{cascade}"))
+    for t in _OLD_EQUIPMENT_TABLES:
+        c.execute(text(f"DROP TABLE IF EXISTS {t}{cascade}"))
+
+
+def _migrate_equipment_to_types(c) -> None:
+    """One-time, in place (2026-10-27): the old category (Transformer, HT
+    Panel, ...) becomes the user-defined *type*, the old group (EMS / Source /
+    BMS) becomes the *category*, and single / distribution moves onto each
+    element as its *kind*. Runs only on the old schema."""
+    old_cols = _column_names(c, "app_equipment_category")
+    if "type" not in old_cols or _column_names(c, "app_equipment_type"):
+        return
+    pg = _dialect_name() == "postgresql"
+    ex = lambda sql: c.execute(text(sql))  # noqa: E731
+    has_groups = bool(_column_names(c, "app_equipment_group"))
+    # 1. Each element keeps what its old category said: kind, and its group.
+    _ensure_column(c, "app_equipment", "kind", "TEXT")
+    _ensure_column(c, "app_equipment", "new_category_id", "TEXT")
+    ex("UPDATE app_equipment SET kind = (SELECT k.type FROM app_equipment_category k WHERE k.id = app_equipment.category_id)")
+    group_src = (
+        "(SELECT k.group_id FROM app_equipment_category k WHERE k.id = app_equipment.category_id)"
+        if "group_id" in old_cols else "NULL"
+    )
+    ex(f"UPDATE app_equipment SET new_category_id = COALESCE({group_src}, 'ems')")
+    # 2. Constraints that point at the old names go; the FK pass re-adds them.
+    if pg:
+        for t, name in (("app_equipment", "fk_equipment_category"), ("app_equipment_category", "fk_category_group"),
+                        ("app_bus_category", "fk_bus_category_bus"), ("app_bus_category", "fk_bus_category_category")):
+            ex(f"ALTER TABLE {t} DROP CONSTRAINT IF EXISTS {name}")
+    for idx in ("ix_equipment_category", "ux_equipment_category_name", "ux_equipment_group_name"):
+        ex(f"DROP INDEX IF EXISTS {idx}")
+    # 3. Renames: elements, the type table, bus rules, then the category table.
+    ex("ALTER TABLE app_equipment RENAME COLUMN category_id TO type_id")
+    ex("ALTER TABLE app_equipment RENAME COLUMN new_category_id TO category_id")
+    ex("ALTER TABLE app_equipment_category RENAME TO app_equipment_type")
+    for col in ("type", "group_id"):
+        if col in old_cols:
+            ex(f"ALTER TABLE app_equipment_type DROP COLUMN {col}")
+    if _column_names(c, "app_bus_category"):
+        ex("ALTER TABLE app_bus_category RENAME TO app_bus_type")
+        ex("ALTER TABLE app_bus_type RENAME COLUMN category_id TO type_id")
+    if has_groups:
+        ex("ALTER TABLE app_equipment_group RENAME TO app_equipment_category")
+    if pg:
+        ex("ALTER TABLE app_equipment ALTER COLUMN type_id DROP NOT NULL")  # the type is optional
+        ex("ALTER TABLE app_equipment ALTER COLUMN kind SET NOT NULL")
+        ex("ALTER TABLE app_equipment ALTER COLUMN category_id SET NOT NULL")
+        ex("ALTER TABLE app_equipment ADD CONSTRAINT ck_equipment_kind CHECK (kind IN ('single', 'distribution'))")
+    # The built-in types exist already: never re-seed them.
+    c.execute(text(_upsert_sql("app_meta", ["key", "value"], ["key"])), {"key": "equipment_types_seeded", "value": "1"})
+
+
+def _migrate_bus_meter_to_tables(c) -> None:
+    """One-time (2026-10-27): MFM slots hold the logger table, not the device.
+    A slot whose device has exactly one table keeps that table; others are
+    dropped (logged). Runs only while app_bus_meter still has device_id."""
+    cols = _column_names(c, "app_bus_meter")
+    if not cols or "table_id" in cols:
+        return
+    log = logging.getLogger(__name__)
+    old = c.execute(text(
+        "SELECT bus_id, device_id, role, " + ("equipment_id" if "equipment_id" in cols else "NULL") +
+        " AS equipment_id, sort_order FROM app_bus_meter"
+    )).mappings().all()
+    keep = []
+    for r in old:
+        tables = c.execute(text("SELECT id FROM app_device_tables WHERE device_id=:d"), {"d": r["device_id"]}).fetchall()
+        if len(tables) == 1:
+            keep.append({**dict(r), "table_id": tables[0][0]})
+        else:
+            log.warning("MFM slot dropped: device %s has %d tables (bus %s)", r["device_id"], len(tables), r["bus_id"])
+    cascade = " CASCADE" if _dialect_name() == "postgresql" else ""
+    c.execute(text(f"DROP TABLE app_bus_meter{cascade}"))
+    c.execute(text(
+        "CREATE TABLE app_bus_meter (bus_id TEXT NOT NULL, table_id TEXT NOT NULL UNIQUE, "
+        "role TEXT CHECK (role IS NULL OR role IN ('incomer', 'outgoer')), equipment_id TEXT, "
+        "sort_order INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (bus_id, table_id))"
+    ))
+    for r in keep:
+        c.execute(text(
+            "INSERT INTO app_bus_meter (bus_id, table_id, role, equipment_id, sort_order) VALUES (:bus_id, :table_id, :role, :equipment_id, :sort_order)"
+        ), r)
+
+
+def seed_equipment_types(c=None) -> None:
+    """Insert the built-in types once (a type the user deletes stays deleted)."""
+    import json as _json
+
+    if c is None:
+        with _conn() as conn:
+            return seed_equipment_types(conn)
+    if _fetchone(c, "SELECT value FROM app_meta WHERE key='equipment_types_seeded'"):
+        return
+    for tid, name, order, config in _EQUIPMENT_TYPE_SEED:
+        c.execute(
+            text(_upsert_sql("app_equipment_type", ["id", "name", "sort_order", "config_json"], ["id"], [])),
+            {"id": tid, "name": name, "sort_order": order, "config_json": _json.dumps(config)},
+        )
+    c.execute(text(_upsert_sql("app_meta", ["key", "value"], ["key"])), {"key": "equipment_types_seeded", "value": "1"})
+
+
+def _init_equipment() -> None:
+    import json as _json
+    import secrets as _secrets
+    import time as _time
+
+    ddl = [
+        """
+        CREATE TABLE IF NOT EXISTS app_equipment_category (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_equipment_category_name ON app_equipment_category (lower(name))",
+        """
+        CREATE TABLE IF NOT EXISTS app_equipment_type (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            config_json TEXT
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_equipment_type_name ON app_equipment_type (lower(name))",
+        """
+        CREATE TABLE IF NOT EXISTS app_equipment_zone (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_equipment_zone_name ON app_equipment_zone (lower(name))",
+        """
+        CREATE TABLE IF NOT EXISTS app_equipment (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            category_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('single', 'distribution')),
+            type_id TEXT,
+            description TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_equipment_name ON app_equipment (lower(name))",
+        "CREATE INDEX IF NOT EXISTS ix_equipment_category ON app_equipment (category_id)",
+        "CREATE INDEX IF NOT EXISTS ix_equipment_type ON app_equipment (type_id)",
+        """
+        CREATE TABLE IF NOT EXISTS app_bus (
+            id TEXT PRIMARY KEY,
+            equipment_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            incomers INTEGER NOT NULL DEFAULT 0 CHECK (incomers >= 0),
+            outgoers INTEGER NOT NULL DEFAULT 0 CHECK (outgoers >= 0)
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_bus_name ON app_bus (equipment_id, lower(name))",
+        # Which types may be a node's incomers / outgoers.
+        # No rows for a role = not restricted.
+        """
+        CREATE TABLE IF NOT EXISTS app_bus_type (
+            bus_id TEXT NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('incomer', 'outgoer')),
+            type_id TEXT NOT NULL,
+            PRIMARY KEY (bus_id, role, type_id)
+        )
+        """,
+        # Equipment attached to a bus as an incomer or outgoer. An equipment may
+        # sit on several buses (multiple parents), once per bus.
+        """
+        CREATE TABLE IF NOT EXISTS app_bus_equipment (
+            bus_id TEXT NOT NULL,
+            equipment_id TEXT NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('incomer', 'outgoer')),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (bus_id, equipment_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_bus_equipment_equipment ON app_bus_equipment (equipment_id)",
+        # MFMs on a node: logger tables. role = incomer / outgoer on a bus; NULL
+        # for a single element's own meters. A table is on one node only.
+        """
+        CREATE TABLE IF NOT EXISTS app_bus_meter (
+            bus_id TEXT NOT NULL,
+            table_id TEXT NOT NULL UNIQUE,
+            role TEXT CHECK (role IS NULL OR role IN ('incomer', 'outgoer')),
+            equipment_id TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (bus_id, table_id)
+        )
+        """,
+    ]
+    with _conn() as c:
+        _drop_old_equipment_model(c)
+        _migrate_equipment_to_types(c)
+        _migrate_bus_meter_to_tables(c)
+        for stmt in ddl:
+            c.execute(text(stmt))
+        _ensure_column(c, "app_equipment_category", "kinds_json", "TEXT")
+        _ensure_column(c, "app_equipment", "zone_id", "TEXT")
+        if _dialect_name() == "postgresql":
+            # Repair: the first 2026-10-27 migration kept the old NOT NULL of
+            # category_id on the renamed type_id. The type is optional.
+            c.execute(text("ALTER TABLE app_equipment ALTER COLUMN type_id DROP NOT NULL"))
+        c.execute(text("CREATE INDEX IF NOT EXISTS ix_equipment_zone ON app_equipment (zone_id)"))
+        _ensure_column(c, "app_equipment", "subtype", "TEXT")
+        _ensure_column(c, "app_equipment", "spare", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(c, "app_equipment", "values_json", "TEXT")
+        _ensure_column(c, "app_bus", "is_main", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(c, "app_bus", "coupled_next", "INTEGER NOT NULL DEFAULT 0")
+        # Optimistic concurrency: bumped on any change to the equipment, its
+        # nodes, rules, attachments or meters.
+        _ensure_column(c, "app_equipment", "version", "INTEGER NOT NULL DEFAULT 1")
+        # Which feeder (attached equipment) a bus meter measures, if named.
+        _ensure_column(c, "app_bus_meter", "equipment_id", "TEXT")
+        # Categories: seeded rows are inserted when missing; names, order and
+        # allowed kinds edited in the DB are kept.
+        for cid, name, order, kinds in _EQUIPMENT_CATEGORY_SEED:
+            c.execute(
+                text(_upsert_sql("app_equipment_category", ["id", "name", "sort_order"], ["id"], [])),
+                {"id": cid, "name": name, "sort_order": order},
+            )
+            c.execute(
+                text("UPDATE app_equipment_category SET kinds_json=:k WHERE id=:id AND kinds_json IS NULL"),
+                {"k": _json.dumps(kinds), "id": cid},
+            )
+        seed_equipment_types(c)
+        # One MFM per relation: a relation (bus, attached equipment) has at most
+        # one meter. Savepoint: existing duplicates must not abort init.
+        try:
+            with c.begin_nested():
+                c.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS ux_bus_meter_relation ON app_bus_meter (bus_id, equipment_id) "
+                        "WHERE equipment_id IS NOT NULL"
+                    )
+                )
+        except Exception as e:
+            logging.getLogger(__name__).warning("ux_bus_meter_relation not created (duplicate meters on a relation?): %s", e)
+        # Every single equipment has exactly one main node.
+        orphans = c.execute(
+            text(
+                "SELECT e.id, t.config_json FROM app_equipment e LEFT JOIN app_equipment_type t ON t.id = e.type_id "
+                "WHERE e.kind = 'single' AND NOT EXISTS "
+                "(SELECT 1 FROM app_bus b WHERE b.equipment_id = e.id AND b.is_main = 1)"
+            )
+        ).fetchall()
+        for eq_id, cfg in orphans:
+            node = (_json.loads(cfg or "{}") or {}).get("node") or {}
+            c.execute(
+                text(
+                    "INSERT INTO app_bus (id, equipment_id, name, sort_order, incomers, outgoers, is_main) "
+                    "VALUES (:id, :e, 'main', 0, :i, :o, 1)"
+                ),
+                {
+                    "id": f"bus_{int(_time.time() * 1000)}_{_secrets.token_hex(2)}",
+                    "e": eq_id,
+                    "i": int(node.get("incomers", 1)),
+                    "o": int(node.get("outgoers", 1)),
+                },
+            )
+        if _dialect_name() != "postgresql":
+            return
+        # FKs are a backstop for the validation in equipment.py; each attempt
+        # runs in a SAVEPOINT so a failure cannot abort the transaction.
+        existing = {
+            r[0]
+            for r in c.execute(
+                text("SELECT conname FROM pg_constraint WHERE conname = ANY(:names)"),
+                {"names": [f[0] for f in _EQUIPMENT_FKS]},
+            ).fetchall()
+        }
+        for name, table, col, ref, extra in _EQUIPMENT_FKS:
+            if name in existing:
+                continue
+            try:
+                with c.begin_nested():
+                    c.execute(
+                        text(f"ALTER TABLE {table} ADD CONSTRAINT {name} FOREIGN KEY ({col}) REFERENCES {ref} {extra}")
+                    )
+            except Exception:
+                pass
+
 
 # ---------- Schemas ----------
 def load_schemas() -> List[Dict[str, Any]]:
     with _conn() as c:
-        rows = _fetchall(c, "SELECT id, name FROM app_schemas ORDER BY name")
+        rows = _fetchall(c, "SELECT id, name, description FROM app_schemas ORDER BY name")
         out: List[Dict[str, Any]] = []
         for r in rows:
             f = _fetchall(
@@ -451,15 +1075,23 @@ def load_schemas() -> List[Dict[str, Any]]:
                 "FROM app_schema_fields WHERE schema_id=:schema_id ORDER BY key",
                 {"schema_id": r["id"]},
             )
-            out.append({"id": r["id"], "name": r["name"], "fields": f})
+            out.append({"id": r["id"], "name": r["name"], "description": r.get("description"), "fields": f})
         return out
+
+
+def update_schema_meta(schema_id: str, name: str, description: Optional[str]) -> None:
+    with _conn() as c:
+        c.execute(
+            text("UPDATE app_schemas SET name=:n, description=:d WHERE id=:id"),
+            {"n": name, "d": description, "id": schema_id},
+        )
 
 
 def save_schema(schema: Dict[str, Any]) -> None:
     with _conn() as c:
         c.execute(
-            text(_upsert_sql("app_schemas", ["id", "name"], ["id"])),
-            {"id": schema["id"], "name": schema["name"]},
+            text(_upsert_sql("app_schemas", ["id", "name", "description"], ["id"])),
+            {"id": schema["id"], "name": schema["name"], "description": schema.get("description")},
         )
         c.execute(text("DELETE FROM app_schema_fields WHERE schema_id=:schema_id"), {"schema_id": schema["id"]})
         for fld in schema.get("fields") or []:
@@ -512,6 +1144,7 @@ def add_schema_field(schema_id: str, field: Dict[str, Any]) -> None:
 def delete_schema(schema_id: str) -> bool:
     """Delete a schema and all its fields. Returns True if the schema was deleted."""
     with _conn() as c:
+        c.execute(text("DELETE FROM app_schema_alert WHERE schema_id=:sid"), {"sid": schema_id})
         c.execute(text("DELETE FROM app_schema_fields WHERE schema_id=:sid"), {"sid": schema_id})
         result = c.execute(text("DELETE FROM app_schemas WHERE id=:sid"), {"sid": schema_id})
         return result.rowcount > 0
@@ -520,6 +1153,12 @@ def delete_schema(schema_id: str) -> bool:
 def delete_schema_field(schema_id: str, field_key: str) -> bool:
     """Delete a single field from a schema. Returns True if a row was deleted."""
     with _conn() as c:
+        # Alert rules on the removed field go too: the schema's, and every
+        # table override / active state for that field on this schema's tables.
+        c.execute(text("DELETE FROM app_schema_alert WHERE schema_id=:sid AND field_key=:key"), {"sid": schema_id, "key": field_key})
+        tables = "(SELECT id FROM app_device_tables WHERE schema_id=:sid)"
+        c.execute(text(f"DELETE FROM app_table_alert WHERE field_key=:key AND table_id IN {tables}"), {"sid": schema_id, "key": field_key})
+        c.execute(text(f"DELETE FROM app_alert_state WHERE field_key=:key AND table_id IN {tables}"), {"sid": schema_id, "key": field_key})
         result = c.execute(
             text("DELETE FROM app_schema_fields WHERE schema_id=:sid AND key=:key"),
             {"sid": schema_id, "key": field_key},
@@ -621,6 +1260,9 @@ def set_table_status(table_id: str, status: str, last_migrated_at: Optional[str]
 
 def delete_table(table_id: str) -> None:
     with _conn() as c:
+        # Alert overrides and active states go with the table (event history is kept).
+        c.execute(text("DELETE FROM app_table_alert WHERE table_id=:id"), {"id": table_id})
+        c.execute(text("DELETE FROM app_alert_state WHERE table_id=:id"), {"id": table_id})
         c.execute(text("DELETE FROM app_device_tables WHERE id=:id"), {"id": table_id})
 
 
@@ -1215,8 +1857,23 @@ def update_device_metadata(dev_id: str, *, name: Optional[str] = None, auto_reco
         c.execute(text(sql), values)
 
 
+def update_device_connection(dev_id: str, *, protocol: str, params: Dict[str, Any]) -> None:
+    """Change a device's protocol / connection params (host, endpoint, ...)."""
+    with _conn() as c:
+        c.execute(
+            text("UPDATE app_devices SET protocol=:p, params_json=:j WHERE id=:id"),
+            {"p": protocol, "j": _params_dump(params), "id": dev_id},
+        )
+
+
+def clear_device_gateway(dev_id: str) -> None:
+    with _conn() as c:
+        c.execute(text("UPDATE app_devices SET gateway_id=NULL WHERE id=:id"), {"id": dev_id})
+
+
 def delete_device(dev_id: str) -> None:
     with _conn() as c:
+        c.execute(text("DELETE FROM app_device_verification WHERE device_id=:id"), {"id": dev_id})
         c.execute(text("DELETE FROM app_devices WHERE id=:id"), {"id": dev_id})
 
 
@@ -1289,7 +1946,7 @@ def load_job_runs(job_id: str, frm: Optional[str] = None, to: Optional[str] = No
 
 # ---------- Notifications ----------
 
-NOTIFICATION_TYPES = {"job", "trigger", "migration_failed", "migration_success", "slow_query", "performance_summary", "prediction"}
+NOTIFICATION_TYPES = {"job", "trigger", "alert", "migration_failed", "migration_success", "slow_query", "performance_summary", "prediction"}
 
 
 def create_notification(notif_type: str, message: str, user: str) -> Dict[str, Any]:

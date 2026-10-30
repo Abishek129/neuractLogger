@@ -4,16 +4,11 @@ Asserts CURRENT behavior:
   * guarded POSTs without a token        -> 401
   * read-only role on write endpoints    -> 403
   * write role on write endpoints        -> 200
-  * public GETs without any token        -> 200  (see note below)
+  * every GET needs a token              -> 401 without one
 
-NOTE (under review): GET /schemas, /tables, /devices and /jobs2 are
-intentionally PUBLIC today — their routers are mounted without auth
-(app.py "Public routers" / "Unprotected legacy router" comments) and only
-the mutating endpoints carry per-endpoint Depends(require_logger_write).
-By contrast GET /storage/targets sits behind router-level
-require_safe_or_write and needs a valid token. This inconsistency is an
-audit item; these tests pin the current contract so any future hardening
-shows up as an explicit, reviewed test change.
+GET /schemas, /tables, /devices and /jobs2 used to be public; their routers
+are now mounted behind require_safe_or_write like the rest (B4). The
+neuract-admin client role counts as read + write.
 """
 from __future__ import annotations
 
@@ -55,16 +50,33 @@ def test_write_role_can_write(auth_role, client):
     assert r.status_code == 200, r.text
 
 
-def test_public_gets_200_without_token(no_auth, client):
-    # Intentionally public today (under review) — see module docstring.
+def test_formerly_public_gets_need_a_token(no_auth, client):
+    # These GETs used to be public; every read now needs a token (B4).
     for path in PUBLIC_GETS:
         r = client.get(path)
-        assert r.status_code == 200, f"GET {path} expected 200 (public), got {r.status_code}"
+        assert r.status_code == 401, f"GET {path} expected 401, got {r.status_code}"
 
 
-def test_storage_get_requires_token_unlike_other_gets(no_auth, client):
-    # The documented inconsistency: /storage GET is token-gated while the
-    # GETs above are public.
+def test_formerly_public_gets_with_read_role(auth_role, client):
+    auth_role("read")
+    for path in PUBLIC_GETS:
+        assert client.get(path).status_code == 200, path
+
+
+def test_neuract_admin_client_role_can_write(client, monkeypatch):
+    """A token whose only role is the neuract-admin client role (as in existing
+    Keycloak setups, resource_access["neuract-logger"]) may read and write."""
+    import conftest as cf
+
+    claims = {"realm_access": {"roles": []}, "resource_access": {"neuract-logger": {"roles": ["neuract-admin"]}},
+              "preferred_username": "contract-admin", "sub": "x"}
+    monkeypatch.setattr(cf, "_claims_for_mode", lambda mode: claims)
+    assert client.get("/equipment/categories").status_code == 200
+    r = client.post("/equipment", json={"name": "ADMIN-W", "categoryId": "ems", "kind": "single", "typeId": "load"})
+    assert r.status_code == 200, r.text
+
+
+def test_storage_get_requires_token(no_auth, client):
     r = client.get("/storage/targets")
     assert r.status_code == 401
 

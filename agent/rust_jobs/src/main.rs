@@ -5,14 +5,14 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use base64::Engine;
 use byteorder::{BigEndian, ByteOrder};
-use chrono::{Utc, Local, FixedOffset};
+use chrono::{Utc, Local, FixedOffset, SecondsFormat};
 use log::{error, info, warn, LevelFilter};
 use opcua::client::prelude::*;
 use opcua::sync::RwLock;
@@ -29,7 +29,6 @@ use futures::future::join_all;
 use sysinfo::{Pid, System};
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 
-const DEFAULT_OPCUA_ENDPOINT: &str = "opc.tcp://127.0.0.1:4840/freeopcua/server/";
 const ERROR_LOG_FILENAME: &str = "error_log_rust.csv";
 const LOG_FILENAME: &str = "agent_rust.log";
 const MQTT_LOG_FILENAME: &str = "mqtt_jobs.log";
@@ -430,6 +429,9 @@ struct TableRuntime {
     modbus_buckets: Vec<RegisterBucket>,
     /// Derived fields with formulas, sorted by eval_order for single-pass evaluation
     derived_fields: Vec<DerivedField>,
+    /// Effective alert rules (schema rules merged with this table's overrides),
+    /// loaded at job start.
+    alert_rules: Vec<AlertRule>,
 }
 
 struct ReadTimings {
@@ -531,35 +533,33 @@ impl DeviceManager {
         Self { sessions: Mutex::new(HashMap::new()) }
     }
 
-    fn get_session(&self, device: &Device) -> Result<Arc<Mutex<DeviceSession>>> {
+    fn get_session(&self, device: &Device, gateway: Option<&Gateway>) -> Result<Arc<Mutex<DeviceSession>>> {
         let dev_id = device.id.clone();
         if let Some(sess) = self.sessions.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&dev_id) {
             return Ok(sess.clone());
         }
-        let endpoint = device
-            .params
-            .get("endpoint")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or(DEFAULT_OPCUA_ENDPOINT);
-        let endpoint = normalize_endpoint(endpoint);
-        let endpoint_id = "default";
-        let client = ClientBuilder::new()
+        let endpoint = normalize_endpoint(&opcua_endpoint_url(device, gateway)?);
+        let mut client = ClientBuilder::new()
             .application_name("neuract-job-runner")
             .application_uri("urn:neuract:job-runner")
             .product_uri("urn:neuract:job-runner")
             .trust_server_certs(true)
             .create_sample_keypair(true)
             .session_retry_limit(1)
-            .endpoint(endpoint_id, ClientEndpoint::new(endpoint.clone()))
-            .default_endpoint(endpoint_id)
             .client()
             .ok_or_else(|| anyhow!("opcua client build failed"))?;
-        let mut client = client;
+        let server_endpoints = client
+            .get_server_endpoints_from_url(endpoint.as_str())
+            .map_err(|e| anyhow!("opcua connect failed: {}: {}", endpoint, e))?;
+        let chosen = pick_opcua_endpoint(&server_endpoints, &endpoint)
+            .ok_or_else(|| anyhow!("opcua server at {} offers no unsecured (None) endpoint", endpoint))?;
         let session = client
-            .connect_to_endpoint_id(None)
-            .map_err(|e| anyhow!("opcua connect failed: {}", e))?;
+            .new_session_from_info((chosen, IdentityToken::Anonymous))
+            .map_err(|e| anyhow!("opcua session failed: {}", e))?;
+        session
+            .write()
+            .connect_and_activate()
+            .map_err(|e| anyhow!("opcua connect failed: {}: {}", endpoint, e))?;
         let sess = DeviceSession {
             endpoint,
             _client: client,
@@ -571,6 +571,62 @@ impl DeviceManager {
         self.sessions.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(dev_id, handle.clone());
         Ok(handle)
     }
+
+    /// Forget a device's session after a failed read so the next poll
+    /// reconnects (e.g. after the OPC UA server restarted).
+    fn drop_session(&self, device_id: &str) {
+        self.sessions.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(device_id);
+    }
+}
+
+/// Where an OPC UA device lives, as the API's connection test resolves it:
+/// params.endpoint, else an opc.tcp:// gateway host, else the gateway host
+/// (or params.host) with the device port (default 4840).
+fn opcua_endpoint_url(device: &Device, gateway: Option<&Gateway>) -> Result<String> {
+    let param = |k: &str| {
+        device.params.get(k).and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
+    };
+    if let Some(ep) = param("endpoint") {
+        return Ok(ep);
+    }
+    let gw_host = gateway.and_then(|g| g.host.as_deref()).map(str::trim).filter(|h| !h.is_empty());
+    if let Some(h) = gw_host.filter(|h| h.starts_with("opc.tcp://")) {
+        return Ok(h.to_string());
+    }
+    let host = gw_host.map(str::to_string).or_else(|| param("host")).or_else(|| param("ip"));
+    match host {
+        Some(h) => Ok(format!("opc.tcp://{}:{}", h, device.port.unwrap_or(4840))),
+        None => Err(anyhow!("OPCUA_ENDPOINT_MISSING: device {} has no endpoint or host", device.id)),
+    }
+}
+
+/// Split an opc.tcp URL into "opc.tcp://host:port" and its path ("" if none).
+fn split_opc_url(url: &str) -> Option<(&str, &str)> {
+    let start = url.find("://")? + 3;
+    Some(match url[start..].find('/') {
+        Some(i) => (&url[..start + i], &url[start + i..]),
+        None => (url, ""),
+    })
+}
+
+/// The server endpoint to open a session on: one with security None that
+/// matches the configured URL, else (devices are often entered as just
+/// opc.tcp://ip:port) the server's unsecured endpoint path at our host:port.
+fn pick_opcua_endpoint(server_endpoints: &[EndpointDescription], url: &str) -> Option<EndpointDescription> {
+    if let Some(e) = Client::find_matching_endpoint(server_endpoints, url, SecurityPolicy::None, MessageSecurityMode::None) {
+        return Some(e);
+    }
+    let mut e = server_endpoints
+        .iter()
+        .find(|e| {
+            e.security_mode == MessageSecurityMode::None
+                && SecurityPolicy::from_uri(e.security_policy_uri.as_ref()) == SecurityPolicy::None
+        })?
+        .clone();
+    let (base, _) = split_opc_url(url)?;
+    let (_, path) = split_opc_url(e.endpoint_url.as_ref())?;
+    e.endpoint_url = format!("{}{}", base, path).into();
+    Some(e)
 }
 
 struct TargetManager {
@@ -970,6 +1026,9 @@ async fn run_job(
     let mut last_values: HashMap<String, FieldMap> = HashMap::new();
     let mut last_notification: HashMap<String, Instant> = HashMap::new();
     let notify_cooldown = Duration::from_secs(notify_cooldown_sec);
+    // Alert state per (table, field): the alert level id currently active, or
+    // None = normal. Seeded from app_alert_state so a restart does not re-raise.
+    let mut alert_states = load_alert_states(meta_client.as_ref(), &job.tables).await;
     let mut last_report = Instant::now();
     let mut win_reads_ok: u64 = 0;
     let mut win_reads_err: u64 = 0;
@@ -1125,6 +1184,13 @@ async fn run_job(
                 // Phase 1.5: Evaluate derived fields for each table
                 for (table_rt, values) in pending_writes.iter_mut() {
                     eval_derived_fields(&job.id, &table_rt.table.id, &table_rt.derived_fields, values, table_rt.device.nominal_voltage);
+                }
+                // Phase 1.6: alert states (act only when a field's state changes)
+                for (table_rt, values) in pending_writes.iter() {
+                    let changes = detect_alert_changes(&mut alert_states, &table_rt.table.id, &table_rt.alert_rules, values);
+                    for ch in changes {
+                        persist_alert_change(meta_client.as_ref(), &http_client, &api_base_url, &job.id, &table_rt.table.name, &ch).await;
+                    }
                 }
 
                 // Phase 2: Write all tables — fire and continue (#4: overlap with next read)
@@ -1283,6 +1349,10 @@ async fn run_job(
                     // Evaluate derived fields before trigger evaluation
                     let mut values = values;
                     eval_derived_fields(&job.id, &table_id, &table_rt.derived_fields, &mut values, table_rt.device.nominal_voltage);
+                    // Alert states (act only when a field's state changes)
+                    for ch in detect_alert_changes(&mut alert_states, &table_id, &table_rt.alert_rules, &values) {
+                        persist_alert_change(meta_client.as_ref(), &http_client, &api_base_url, &job.id, &table_rt.table.name, &ch).await;
+                    }
                     let fire_info = eval_triggers(&triggers, table_id.as_str(), &values, &mut last_values);
                     let should_fire = fire_info.is_some();
                     info!("Job {} [TRIG_EVAL] table={} fired={}", job.id, table_id, should_fire);
@@ -1601,6 +1671,7 @@ async fn build_table_runtime(
     meta_client: &PgClient,
     target_manager: &TargetManager,
 ) -> Result<Option<TableRuntime>> {
+    let table_id_for_alerts = table.id.clone();
     let target_id = table.db_target_id.clone().or_else(|| default_target.clone());
     let Some(target_id) = target_id else {
         return Ok(None);
@@ -1677,6 +1748,7 @@ async fn build_table_runtime(
         gateway,
         modbus_buckets,
         derived_fields,
+        alert_rules: load_alert_rules(meta_client, &table_id_for_alerts).await,
     }))
 }
 
@@ -1692,6 +1764,7 @@ async fn read_table_values_cached(
             read_opcua_values_blocking(
                 device_manager.clone(),
                 table_rt.device.clone(),
+                table_rt.gateway.clone(),
                 table_rt.mapping.clone(),
                 job_id.to_string(),
             )
@@ -2310,6 +2383,261 @@ fn eval_op(val: Option<f64>, prev: Option<f64>, op: &str, threshold: Option<f64>
         "falling" => match (val, prev, threshold) { (Some(v), Some(p), Some(t)) => p >= t && v < t, _ => false },
         _ => false,
     }
+}
+
+// --- Alerts on readings ---
+//
+// Rules come from app_schema_alert (the schema blueprint) merged with
+// app_table_alert (per-table override for the same field + level, or
+// enabled = 0 to switch it off). Each table field has one state: normal, or
+// the most severe level whose rule matches the latest reading. Only a change
+// of state is acted on: app_alert_state is updated, an app_alert_event row is
+// written and an "alert" notification is posted.
+
+#[derive(Clone, Debug, PartialEq)]
+struct AlertRule {
+    field_key: String,
+    alert_id: String,
+    alert_name: String,
+    severity: i64,
+    op: String,
+    threshold: f64,
+}
+
+/// A table override row: op/threshold None = inherit the schema rule's.
+#[derive(Clone, Debug)]
+struct AlertOverride {
+    field_key: String,
+    alert_id: String,
+    alert_name: String,
+    severity: i64,
+    op: Option<String>,
+    threshold: Option<f64>,
+    enabled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct AlertChange {
+    table_id: String,
+    field_key: String,
+    from_alert_id: Option<String>,
+    to: Option<AlertRule>,
+    value: f64,
+}
+
+/// Effective rules = schema rules, with overrides for the same (field, level)
+/// replacing them; an override without a schema rule is a table-only rule.
+fn merge_alert_rules(schema: Vec<AlertRule>, overrides: Vec<AlertOverride>) -> Vec<AlertRule> {
+    let mut out: Vec<AlertRule> = schema;
+    for o in overrides {
+        let pos = out.iter().position(|r| r.field_key == o.field_key && r.alert_id == o.alert_id);
+        if !o.enabled {
+            if let Some(i) = pos {
+                out.remove(i);
+            }
+            continue;
+        }
+        match pos {
+            Some(i) => {
+                if let Some(op) = o.op {
+                    out[i].op = op;
+                }
+                if let Some(t) = o.threshold {
+                    out[i].threshold = t;
+                }
+            }
+            None => {
+                if let (Some(op), Some(t)) = (o.op, o.threshold) {
+                    out.push(AlertRule {
+                        field_key: o.field_key,
+                        alert_id: o.alert_id,
+                        alert_name: o.alert_name,
+                        severity: o.severity,
+                        op,
+                        threshold: t,
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The state of every field that has rules and a numeric reading:
+/// Some(most severe matching rule) or None (normal). Fields without a
+/// numeric value in this reading are left out (their state is unchanged).
+fn eval_alert_state(rules: &[AlertRule], values: &FieldMap) -> Vec<(String, f64, Option<AlertRule>)> {
+    let mut fields: Vec<&str> = rules.iter().map(|r| r.field_key.as_str()).collect();
+    fields.sort();
+    fields.dedup();
+    let mut out = Vec::new();
+    for f in fields {
+        let Some(v) = values.get(f).and_then(|fv| fv.as_f64()).filter(|v| v.is_finite()) else { continue; };
+        let mut best: Option<&AlertRule> = None;
+        for r in rules.iter().filter(|r| r.field_key == f) {
+            if eval_op(Some(v), None, &r.op, Some(r.threshold), 0.0)
+                && best.map_or(true, |b| r.severity > b.severity)
+            {
+                best = Some(r);
+            }
+        }
+        out.push((f.to_string(), v, best.cloned()));
+    }
+    out
+}
+
+/// Compare against the tracked state; update it and return the changes.
+fn detect_alert_changes(
+    states: &mut HashMap<(String, String), Option<String>>,
+    table_id: &str,
+    rules: &[AlertRule],
+    values: &FieldMap,
+) -> Vec<AlertChange> {
+    let mut changes = Vec::new();
+    if rules.is_empty() {
+        return changes;
+    }
+    for (field, value, rule) in eval_alert_state(rules, values) {
+        let key = (table_id.to_string(), field.clone());
+        let old = states.get(&key).cloned().flatten();
+        let new = rule.as_ref().map(|r| r.alert_id.clone());
+        if old != new {
+            states.insert(key, new);
+            changes.push(AlertChange { table_id: table_id.to_string(), field_key: field, from_alert_id: old, to: rule, value });
+        }
+    }
+    changes
+}
+
+async fn load_alert_rules(client: &PgClient, table_id: &str) -> Vec<AlertRule> {
+    let schema_rows = client
+        .query(
+            "SELECT sa.field_key, sa.alert_id, a.name, a.severity::bigint AS severity, sa.op, sa.threshold \
+             FROM app_schema_alert sa JOIN app_alert a ON a.id = sa.alert_id \
+             JOIN app_device_tables t ON t.schema_id = sa.schema_id WHERE t.id = $1",
+            &[&table_id],
+        )
+        .await;
+    let override_rows = client
+        .query(
+            "SELECT ta.field_key, ta.alert_id, a.name, a.severity::bigint AS severity, ta.op, ta.threshold, ta.enabled::bigint AS enabled \
+             FROM app_table_alert ta JOIN app_alert a ON a.id = ta.alert_id WHERE ta.table_id = $1",
+            &[&table_id],
+        )
+        .await;
+    let (Ok(schema_rows), Ok(override_rows)) = (schema_rows, override_rows) else {
+        warn!("table {} alert rules not loaded (alert tables missing?) — alerts off for it", table_id);
+        return Vec::new();
+    };
+    let schema: Vec<AlertRule> = schema_rows
+        .iter()
+        .map(|r| AlertRule {
+            field_key: r.get("field_key"),
+            alert_id: r.get("alert_id"),
+            alert_name: r.get("name"),
+            severity: r.get("severity"),
+            op: r.get("op"),
+            threshold: r.get("threshold"),
+        })
+        .collect();
+    let overrides: Vec<AlertOverride> = override_rows
+        .iter()
+        .map(|r| AlertOverride {
+            field_key: r.get("field_key"),
+            alert_id: r.get("alert_id"),
+            alert_name: r.get("name"),
+            severity: r.get("severity"),
+            op: r.get("op"),
+            threshold: r.get("threshold"),
+            enabled: r.get::<_, i64>("enabled") != 0,
+        })
+        .collect();
+    let rules = merge_alert_rules(schema, overrides);
+    if !rules.is_empty() {
+        info!("table {} loaded {} alert rule(s)", table_id, rules.len());
+    }
+    rules
+}
+
+async fn load_alert_states(client: &PgClient, table_ids: &[String]) -> HashMap<(String, String), Option<String>> {
+    let mut out = HashMap::new();
+    match client
+        .query("SELECT table_id, field_key, alert_id FROM app_alert_state WHERE table_id = ANY($1)", &[&table_ids])
+        .await
+    {
+        Ok(rows) => {
+            for r in rows {
+                out.insert((r.get::<_, String>("table_id"), r.get::<_, String>("field_key")), Some(r.get::<_, String>("alert_id")));
+            }
+        }
+        Err(e) => warn!("alert states not loaded: {}", e),
+    }
+    out
+}
+
+static ALERT_EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Write one state change: app_alert_state (upsert or delete), an
+/// app_alert_event row, and a fire-and-forget "alert" notification.
+async fn persist_alert_change(
+    meta: &PgClient,
+    http_client: &reqwest::Client,
+    api_base_url: &str,
+    job_id: &str,
+    table_name: &str,
+    ch: &AlertChange,
+) {
+    let at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let state_res = match &ch.to {
+        Some(rule) => {
+            meta.execute(
+                "INSERT INTO app_alert_state (table_id, field_key, alert_id, value, since) VALUES ($1, $2, $3, $4, $5) \
+                 ON CONFLICT (table_id, field_key) DO UPDATE SET alert_id = EXCLUDED.alert_id, value = EXCLUDED.value, since = EXCLUDED.since",
+                &[&ch.table_id, &ch.field_key, &rule.alert_id, &ch.value, &at],
+            )
+            .await
+        }
+        None => {
+            meta.execute(
+                "DELETE FROM app_alert_state WHERE table_id = $1 AND field_key = $2",
+                &[&ch.table_id, &ch.field_key],
+            )
+            .await
+        }
+    };
+    if let Err(e) = state_res {
+        warn!("alert state write failed table={} field={}: {}", ch.table_id, ch.field_key, e);
+    }
+    let seq = ALERT_EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
+    let event_id = format!("ae_{}_{}", Utc::now().timestamp_millis(), seq);
+    let to_id = ch.to.as_ref().map(|r| r.alert_id.clone());
+    let op = ch.to.as_ref().map(|r| r.op.clone());
+    let threshold = ch.to.as_ref().map(|r| r.threshold);
+    if let Err(e) = meta
+        .execute(
+            "INSERT INTO app_alert_event (id, table_id, field_key, from_alert_id, to_alert_id, value, op, threshold, job_id, at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            &[&event_id, &ch.table_id, &ch.field_key, &ch.from_alert_id, &to_id, &ch.value, &op, &threshold, &job_id, &at],
+        )
+        .await
+    {
+        warn!("alert event write failed table={} field={}: {}", ch.table_id, ch.field_key, e);
+    }
+    let message = match &ch.to {
+        Some(r) => format!("Alert {}: {}.{} = {} ({} {})", r.alert_name, table_name, ch.field_key, ch.value, r.op, r.threshold),
+        None => format!("Alert cleared: {}.{} = {} (back to normal)", table_name, ch.field_key, ch.value),
+    };
+    info!("job {} {}", job_id, message);
+    let client = http_client.clone();
+    let url = format!("{}/auth/notifications", api_base_url);
+    tokio::spawn(async move {
+        let payload = serde_json::json!({ "type": "alert", "message": message });
+        match client.post(&url).json(&payload).send().await {
+            Ok(r) if !r.status().is_success() => warn!("Alert notify HTTP {}", r.status()),
+            Err(e) => warn!("Alert notify failed: {}", e),
+            _ => {}
+        }
+    });
 }
 
 fn group_triggers(job: &JobDef) -> HashMap<String, Vec<Trigger>> {
@@ -3215,8 +3543,12 @@ fn read_opcua_value(session: &Arc<Mutex<DeviceSession>>, row: &MappingRow, job_i
     let node_id = if let Some(node_id) = sess.nodes.get(&row.address) {
         node_id.clone()
     } else {
-        let parsed = NodeId::from_str(&row.address)
-            .map_err(|e| anyhow!("invalid node id {}: {}", row.address, e))?;
+        let Ok(parsed) = NodeId::from_str(&row.address) else {
+            // A mistyped NodeId is a mapping error for this field only — skip
+            // it (NULL) instead of failing the whole table's read.
+            warn!("Job {} field {}: invalid OPC UA node id {:?} — skipped", job_id, row.field_key, row.address);
+            return Ok(None);
+        };
         sess.nodes.insert(row.address.clone(), parsed.clone());
         parsed
     };
@@ -3252,13 +3584,14 @@ fn read_opcua_value(session: &Arc<Mutex<DeviceSession>>, row: &MappingRow, job_i
 async fn read_opcua_values_blocking(
     device_manager: Arc<DeviceManager>,
     device: Device,
+    gateway: Option<Gateway>,
     mapping: Vec<MappingRow>,
     job_id: String,
 ) -> Result<(FieldMap, ReadTimings)> {
     tokio::task::spawn_blocking(move || {
         let t_fn = Instant::now();
         let t_conn = Instant::now();
-        let session = device_manager.get_session(&device)?;
+        let session = device_manager.get_session(&device, gateway.as_ref())?;
         let endpoint = session.lock().unwrap_or_else(std::sync::PoisonError::into_inner).endpoint.clone();
         let connect_ms = t_conn.elapsed().as_secs_f64() * 1000.0;
         info!(
@@ -3271,7 +3604,15 @@ async fn read_opcua_values_blocking(
             if row.protocol.to_lowercase() != "opcua" {
                 continue;
             }
-            let value = read_opcua_value(&session, &row, &job_id)?;
+            let value = match read_opcua_value(&session, &row, &job_id) {
+                Ok(v) => v,
+                Err(e) => {
+                    // A broken connection fails every read: drop the session
+                    // so the next poll reconnects instead of failing forever.
+                    device_manager.drop_session(&device.id);
+                    return Err(e);
+                }
+            };
             if let Some(v) = value {
                 values.insert(row.field_key, v);
             }
@@ -3408,6 +3749,113 @@ fn dpapi_unprotect(_data: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rule(field: &str, id: &str, sev: i64, op: &str, t: f64) -> AlertRule {
+        AlertRule { field_key: field.into(), alert_id: id.into(), alert_name: id.into(), severity: sev, op: op.into(), threshold: t }
+    }
+
+    fn reading(v: f64) -> FieldMap {
+        let mut m = FieldMap::new();
+        m.insert("voltage".into(), FieldValue::Float(v));
+        m
+    }
+
+    fn opcua_dev(params: serde_json::Value, port: Option<i32>) -> Device {
+        Device { id: "d1".into(), protocol: "opcua".into(), params, unit_id: None, port, gateway_id: None, nominal_voltage: None }
+    }
+
+    #[test]
+    fn opcua_endpoint_resolution_order() {
+        let gw = |h: &str| Gateway { host: Some(h.into()) };
+        let ep = serde_json::json!({"endpoint": "opc.tcp://10.0.0.5:4840/srv/"});
+        // params.endpoint wins
+        assert_eq!(opcua_endpoint_url(&opcua_dev(ep, None), Some(&gw("opc.tcp://1.1.1.1:1"))).unwrap(), "opc.tcp://10.0.0.5:4840/srv/");
+        // bulk import: endpoint on the gateway
+        let none = serde_json::json!({"host": "10.0.0.9"});
+        assert_eq!(opcua_endpoint_url(&opcua_dev(none.clone(), Some(4841)), Some(&gw("opc.tcp://10.0.0.9:4841"))).unwrap(), "opc.tcp://10.0.0.9:4841");
+        // plain gateway host + device port, then params.host + default port
+        assert_eq!(opcua_endpoint_url(&opcua_dev(none.clone(), Some(4999)), Some(&gw("10.0.0.7"))).unwrap(), "opc.tcp://10.0.0.7:4999");
+        assert_eq!(opcua_endpoint_url(&opcua_dev(none, None), None).unwrap(), "opc.tcp://10.0.0.9:4840");
+        // nothing configured: an error, never a hardcoded localhost server
+        assert!(opcua_endpoint_url(&opcua_dev(serde_json::json!({}), None), None).is_err());
+    }
+
+    #[test]
+    fn opcua_endpoint_pick_uses_server_path_at_our_address() {
+        let adv = |url: &str, mode: MessageSecurityMode, pol: &str| -> EndpointDescription {
+            (url, pol, mode, UserTokenPolicy::anonymous()).into()
+        };
+        let server = vec![
+            adv("opc.tcp://plc-host:4840/neuract/sim/", MessageSecurityMode::SignAndEncrypt, SecurityPolicy::Basic256Sha256.to_uri()),
+            adv("opc.tcp://plc-host:4840/neuract/sim/", MessageSecurityMode::None, SecurityPolicy::None.to_uri()),
+        ];
+        // exact path: hostname swapped for ours by the library
+        let e = pick_opcua_endpoint(&server, "opc.tcp://10.0.0.5:4840/neuract/sim/").unwrap();
+        assert_eq!(e.endpoint_url.as_ref(), "opc.tcp://10.0.0.5:4840/neuract/sim/");
+        assert_eq!(e.security_mode, MessageSecurityMode::None);
+        // entered without a path: server's path at our host:port
+        let e = pick_opcua_endpoint(&server, "opc.tcp://10.0.0.5:4840").unwrap();
+        assert_eq!(e.endpoint_url.as_ref(), "opc.tcp://10.0.0.5:4840/neuract/sim/");
+        // secured-only server: nothing to pick
+        assert!(pick_opcua_endpoint(&server[..1], "opc.tcp://10.0.0.5:4840").is_none());
+        assert_eq!(split_opc_url("opc.tcp://h:1"), Some(("opc.tcp://h:1", "")));
+    }
+
+    #[test]
+    fn alert_merge_override_disable_and_table_only() {
+        let schema = vec![rule("voltage", "critical", 3, ">", 250.0), rule("voltage", "mild", 2, ">", 240.0)];
+        let ov = vec![
+            AlertOverride { field_key: "voltage".into(), alert_id: "critical".into(), alert_name: "critical".into(), severity: 3,
+                            op: None, threshold: Some(260.0), enabled: true },
+            AlertOverride { field_key: "voltage".into(), alert_id: "mild".into(), alert_name: "mild".into(), severity: 2,
+                            op: None, threshold: None, enabled: false },
+            AlertOverride { field_key: "current".into(), alert_id: "info".into(), alert_name: "info".into(), severity: 1,
+                            op: Some("<".into()), threshold: Some(1.0), enabled: true },
+        ];
+        let merged = merge_alert_rules(schema, ov);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0], rule("voltage", "critical", 3, ">", 260.0)); // threshold overridden, op inherited
+        assert_eq!(merged[1].field_key, "current"); // table-only rule; mild disabled
+    }
+
+    #[test]
+    fn alert_state_changes_only_on_transition_and_worst_wins() {
+        let rules = vec![rule("voltage", "critical", 3, ">", 250.0), rule("voltage", "mild", 2, ">", 240.0)];
+        let mut st: HashMap<(String, String), Option<String>> = HashMap::new();
+        let ids = |c: &Vec<AlertChange>| c.iter().map(|x| x.to.as_ref().map(|r| r.alert_id.clone())).collect::<Vec<_>>();
+
+        // First reading: normal -> nothing tracked yet, None == None => no change.
+        assert!(detect_alert_changes(&mut st, "t1", &rules, &reading(230.0)).is_empty());
+        let c = detect_alert_changes(&mut st, "t1", &rules, &reading(245.0));
+        assert_eq!(ids(&c), vec![Some("mild".into())]);
+        assert!(detect_alert_changes(&mut st, "t1", &rules, &reading(246.0)).is_empty()); // same state
+        let c = detect_alert_changes(&mut st, "t1", &rules, &reading(255.0));
+        assert_eq!(ids(&c), vec![Some("critical".into())]); // both match -> worst only
+        assert_eq!(c[0].from_alert_id.as_deref(), Some("mild"));
+        let c = detect_alert_changes(&mut st, "t1", &rules, &reading(243.0));
+        assert_eq!(ids(&c), vec![Some("mild".into())]);
+        let c = detect_alert_changes(&mut st, "t1", &rules, &reading(235.0));
+        assert_eq!(ids(&c), vec![None]); // cleared
+        assert_eq!(c[0].value, 235.0);
+    }
+
+    #[test]
+    fn alert_state_skips_missing_values_and_seeded_state() {
+        let rules = vec![rule("voltage", "critical", 3, ">", 250.0)];
+        let mut st: HashMap<(String, String), Option<String>> = HashMap::new();
+        // Seeded from app_alert_state: already critical -> a critical reading is not a change.
+        st.insert(("t1".into(), "voltage".into()), Some("critical".into()));
+        assert!(detect_alert_changes(&mut st, "t1", &rules, &reading(255.0)).is_empty());
+        // No numeric value this read -> state untouched.
+        let mut m = FieldMap::new();
+        m.insert("voltage".into(), FieldValue::Text("n/a".into()));
+        assert!(detect_alert_changes(&mut st, "t1", &rules, &m).is_empty());
+        assert!(detect_alert_changes(&mut st, "t1", &rules, &FieldMap::new()).is_empty());
+        // Other operators.
+        let low = vec![rule("voltage", "critical", 3, "<", 200.0)];
+        let mut st2 = HashMap::new();
+        assert_eq!(detect_alert_changes(&mut st2, "t1", &low, &reading(190.0)).len(), 1);
+    }
 
     // --- pg_escape_literal ---
 

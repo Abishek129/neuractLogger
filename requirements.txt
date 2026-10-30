@@ -22,3 +22,6 @@ PyJWT[crypto]==2.11.0
 httpx==0.28.1
 redis[hiredis]==7.1.0
 python-dotenv==1.2.1
+# Spreadsheet import (POST /equipment/import/ems): file upload + .xlsx parsing.
+python-multipart==0.0.22
+openpyxl==3.1.5

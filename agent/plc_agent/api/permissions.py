@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, Optional
 
 import jwt
@@ -19,17 +20,20 @@ def _get_roles(claims: Dict[str, Any]) -> list[str]:
     return (claims.get("realm_access") or {}).get("roles") or []
 
 
+_ADMIN_ROLE_NAMES = {"neuract-admin", "neuract_admin", "admin"}
+
+
 def has_logger_read_role(claims: Dict[str, Any]) -> bool:
+    """Realm logger-read, or anything that may write (write implies read)."""
     roles = _get_roles(claims)
-    return "logger-read" in roles or "logger_read" in roles
+    return "logger-read" in roles or "logger_read" in roles or has_logger_write_role(claims)
 
 
 def has_logger_write_role(claims: Dict[str, Any]) -> bool:
+    """Realm logger-write, or the neuract-admin client role (existing Keycloak
+    setups grant only that, e.g. resource_access["neuract-logger"])."""
     roles = _get_roles(claims)
-    return "logger-write" in roles or "logger_write" in roles
-
-
-_ADMIN_ROLE_NAMES = {"neuract-admin", "neuract_admin", "admin"}
+    return "logger-write" in roles or "logger_write" in roles or has_admin_role(claims)
 
 
 def _all_roles(claims: Dict[str, Any]) -> set[str]:
@@ -46,11 +50,29 @@ def has_admin_role(claims: Dict[str, Any]) -> bool:
     return bool(_all_roles(claims) & _ADMIN_ROLE_NAMES)
 
 
+def auth_disabled() -> bool:
+    """LOGGER_AUTH_DISABLED=1 turns off all permission checks (local demo only)."""
+    return os.environ.get("LOGGER_AUTH_DISABLED", "").strip().lower() in ("1", "true", "yes")
+
+
+# Claims granted to every request while auth is disabled: read + write + admin.
+_DEV_CLAIMS: Dict[str, Any] = {
+    "realm_access": {"roles": ["logger-read", "logger-write"]},
+    "resource_access": {"neuract_owner": {"roles": ["neuract-admin"]}},
+    "preferred_username": "dev-no-auth",
+    "sub": "00000000-0000-4000-8000-00000000dev0",
+}
+
+
 async def get_claims(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
 ) -> Dict[str, Any]:
     """Core dependency: validate JWT and return claims. Raises 401 if invalid."""
+    if auth_disabled():
+        request.state.auth = dict(_DEV_CLAIMS)
+        return request.state.auth
+
     token: Optional[str] = None
 
     if credentials and credentials.credentials:

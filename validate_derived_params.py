@@ -80,7 +80,7 @@ def load_real_validator(path: Path):
 
     wanted_funcs = {"_extract_formula_vars", "_validate_and_order_derived_fields",
                     "_parse_formula"}
-    wanted_assign = {"_FORMULA_FUNCTIONS", "_IDENT_RE", "_FORMULA_CONSTANTS",
+    wanted_assign = {"_FORMULA_FUNCTIONS", "_IDENT_RE", "_FORMULA_CONSTANTS", "_DEVICE_CONSTANTS",
                      "_FORMULA_FUNC_ARITY", "_FORMULA_TOKEN_RE", "_FORMULA_NUMBER_RE",
                      "VALID_FIELD_TYPES", "DERIVED_FIELD_TYPES", "MAX_IDENT_LEN"}
 
@@ -101,6 +101,11 @@ def load_real_validator(path: Path):
     ast.fix_missing_locations(module)
     # PEP 585: map typing names to builtins so annotations like List[Dict[str,Any]] evaluate.
     ns = {"re": re, "List": list, "Dict": dict, "Any": object, "Set": set}
+    # Field types are DB-managed (app_field_type); stand in the seeded numeric
+    # encodings so the validator runs without a database.
+    _numeric = ("float32", "float64", "int16", "uint16", "uint16_enum",
+                "int32", "uint32", "int64", "uint64", "bool16")
+    ns["_field_types"] = lambda: {t: {"id": t, "encoding": t} for t in _numeric}
     exec(compile(module, filename=str(path), mode="exec"), ns)
     return ns["_validate_and_order_derived_fields"], ns
 

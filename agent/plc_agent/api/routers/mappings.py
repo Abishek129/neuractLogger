@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional
 from fastapi import APIRouter, HTTPException
 import logging
 
+from .. import appdb
 from ..store import Store
 from ..redact import redact_dsn
 from sqlalchemy import create_engine, text  # type: ignore
@@ -105,9 +106,18 @@ _MODBUS_REG_COUNT = {
 
 
 def _build_field_type_map(table: Dict[str, Any]) -> Dict[str, str]:
-    """Build {field_key: encoding_type} from the table's schema fields."""
+    """Build {field_key: register encoding} from the table's schema fields.
+
+    A field's type word (e.g. "REAL") is translated to its decoding through
+    the DB-managed app_field_type list, so the engine gets an encoding it
+    understands instead of falling back to one u16 register."""
     schema = Store.instance().get_schema(table.get("schemaId")) or {"fields": []}
-    return {f["key"]: f.get("type", "float32") for f in schema.get("fields", [])}
+    enc = {r["id"].lower(): r["encoding"] for r in appdb.load_field_types()}
+    out = {}
+    for f in schema.get("fields", []):
+        word = (f.get("type") or "float32").lower()
+        out[f["key"]] = enc.get(word, word)
+    return out
 
 
 @router.get("/{table_id}")
@@ -149,12 +159,15 @@ def list_schema_fields(table_id: str) -> Dict[str, Any]:
     rows = m.get("rows") or {}
     schema = Store.instance().get_schema(t.get("schemaId")) or {"fields": []}
     schema_fields = schema.get("fields") or []
+    # Unmapped fields fall back to their type's decoding (app_field_type), so a
+    # word like "REAL" shows as float32 — the encoding a save would store.
+    type_encoding = _build_field_type_map(t)
 
     items = []
     for f in schema_fields:
         key = f.get("key")
         r = rows.get(key) or {}
-        encoding = r.get("encoding") or f.get("type") or "float32"
+        encoding = r.get("encoding") or type_encoding.get(key) or "float32"
         scale = r.get("scale")
         if scale is None:
             scale = f.get("scale") if f.get("scale") is not None else 1
@@ -275,9 +288,17 @@ def bulk_apply(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.post("/{table_id}/import")
 def import_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Import mapping rows. Upserts by default; replaces every non-derived row
+    only with an explicit ``"mode": "replace"``. A body without ``rows`` is
+    refused (it used to wipe the table)."""
     t = _resolve_table(table_id, db_target_override=payload.get("dbTargetId"))
     mapping = payload.get("mapping") or payload
-    rows = mapping.get("rows") or {}
+    rows = mapping.get("rows") if isinstance(mapping, dict) else None
+    if not isinstance(rows, dict):
+        raise HTTPException(status_code=400, detail="ROWS_REQUIRED: body must carry rows {fieldKey: {...}}")
+    mode = payload.get("mode", mapping.get("mode", "merge"))
+    if mode not in ("merge", "replace"):
+        raise HTTPException(status_code=400, detail="MODE_INVALID: merge or replace")
     # DP7(b): derived rows are engine-owned — strip them from manual imports
     # (the replace below also preserves existing protocol='derived' rows).
     derived_keys = {
@@ -290,13 +311,19 @@ def import_mapping(table_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             rows.pop(k)
     _validate_row_field_keys(rows)  # L19
     field_type_map = _build_field_type_map(t)
-    _replace_mapping_in_user_db(t, rows, mapping.get("deviceId") or payload.get("deviceId"), field_type_map=field_type_map)
-    m = Store.instance().replace_mapping(table_id, {"deviceId": mapping.get("deviceId") or payload.get("deviceId"), "rows": rows})
+    device_id = mapping.get("deviceId") or payload.get("deviceId")
+    if mode == "replace":
+        _replace_mapping_in_user_db(t, rows, device_id, field_type_map=field_type_map)
+        m = Store.instance().replace_mapping(table_id, {"deviceId": device_id, "rows": rows})
+    else:
+        device_id = device_id or t.get("deviceId")
+        _save_mapping_to_user_db(t, rows, device_id, field_type_map=field_type_map)
+        m = Store.instance().upsert_mapping(table_id, device_id=device_id, rows_patch=rows)
     schema = Store.instance().get_schema(t.get("schemaId")) or {"fields": []}
     schema_fields = schema.get("fields") or []
     required = [f.get("key") for f in schema_fields]
     health = Store.instance().mapping_health(table_id, required_fields=required, schema_fields=schema_fields)
-    return {"success": True, "message": "mapping_imported", "item": m, "health": health}
+    return {"success": True, "message": "mapping_imported", "mode": mode, "item": m, "health": health}
 
 
 @router.post("/{table_id}/validate")
@@ -611,6 +638,10 @@ def delete_mapping_row(table_id: str, field_key: str) -> Dict[str, Any]:
     t = Store.instance().get_table(table_id)
     if not t:
         raise HTTPException(status_code=404, detail="TABLE_NOT_FOUND")
+    # Persist the delete in the user DB too; otherwise the row is re-hydrated
+    # from there on the next table load. Derived rows are engine-owned.
+    if _delete_mapping_from_user_db(_resolve_table(table_id), field_key) == "derived":
+        raise HTTPException(status_code=400, detail=f"DERIVED_ROW: {field_key} is computed from the schema formula")
     m = Store.instance().delete_mapping_row(table_id, field_key)
     return {"success": True, "message": "row_deleted", "item": m}
 
@@ -747,8 +778,28 @@ def _ensure_mapping_table(engine, table_name: Optional[str] = None) -> None:
                 pass
 
 
+_MAPPING_LATE_COLUMNS = ("device_id", "encoding")
+
+
 def _ensure_mapping_table_columns(engine, table_name: str) -> None:
-    # Best-effort ensure device_id column exists
+    # Best-effort: add columns newer code writes (device_id, encoding) to a
+    # mapping table created by an older version. Without encoding every
+    # mapping save fails on that table.
+    if _dialect_name(engine).startswith("postgres"):
+        schema, _, name = table_name.rpartition(".")
+        try:
+            with engine.begin() as conn:
+                have = {r[0] for r in conn.execute(
+                    text("SELECT column_name FROM information_schema.columns WHERE table_schema=:s AND table_name=:t"),
+                    {"s": schema or "public", "t": name},
+                )}
+                for col in _MAPPING_LATE_COLUMNS:
+                    if col not in have:
+                        conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {col} TEXT"))
+                        log.warning("mapping table %s: added missing column %s", table_name, col)
+        except Exception as e:
+            log.warning("mapping table %s: column check failed: %s", table_name, e)
+        return
     try:
         with engine.begin() as conn:
             try:
@@ -765,11 +816,12 @@ def _ensure_mapping_table_columns(engine, table_name: str) -> None:
                         names.add(c["name"])  # type: ignore[index]
                     except Exception:
                         pass
-            if "device_id" not in names:
-                try:
-                    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN device_id TEXT"))
-                except Exception:
-                    pass
+            for col in _MAPPING_LATE_COLUMNS:
+                if col not in names:
+                    try:
+                        conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {col} TEXT"))
+                    except Exception:
+                        pass
     except Exception:
         pass
 
@@ -785,15 +837,21 @@ def _select_mapping_table(engine, *, create: bool = False) -> str:
     """Return a qualified mapping table name to use. Prefer existing; else create standard.
     """
     # Probe candidates by issuing a no-op select
+    found = None
     with engine.connect() as conn:
         for name in _mapping_table_candidates(engine):
             try:
                 conn.execute(text(f"SELECT 1 FROM {name} WHERE 1=0"))
-                # ensure expected columns exist
-                _ensure_mapping_table_columns(engine, name)
-                return name
+                found = name
+                break
             except Exception:
+                conn.rollback()
                 continue
+    if found:
+        # ensure expected columns exist — only after the probe connection is
+        # closed: its open read lock would block the ALTER forever.
+        _ensure_mapping_table_columns(engine, found)
+        return found
     if create:
         _ensure_mapping_table(engine)
         ident = _mapping_ident(engine)
@@ -847,7 +905,7 @@ def _save_mapping_to_user_db(table: Dict[str, Any], rows: Dict[str, Dict[str, An
                         ),
                         params,
                     )
-            except Exception:
+            except Exception as first_err:
                 # Basic upsert fallback: delete then insert
                 try:
                     conn.execute(text(f"DELETE FROM {m_table} WHERE table_name=:t AND field_key=:k"), {"t": t_ident["name"], "k": k})
@@ -859,7 +917,31 @@ def _save_mapping_to_user_db(table: Dict[str, Any], rows: Dict[str, Dict[str, An
                         params,
                     )
                 except Exception:
-                    pass
+                    # Never answer 200 for a row that was not stored.
+                    log.error("mapping save failed table=%s field=%s: %s", t_ident["name"], k, first_err)
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"MAPPING_SAVE_FAILED: {k}: {str(first_err).splitlines()[0][:200]}",
+                    )
+
+
+def _delete_mapping_from_user_db(table: Dict[str, Any], field_key: str) -> Optional[str]:
+    """Delete one non-derived mapping row; returns "derived" if the row is a derived one."""
+    engine = _engine_for_target_id(table.get("dbTargetId"))
+    m_table = _select_mapping_table(engine, create=True)
+    t_ident = _device_ident(engine, table.get("name"))
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(f"SELECT protocol FROM {m_table} WHERE table_name=:t AND field_key=:k"),
+            {"t": t_ident["name"], "k": field_key},
+        ).first()
+        if row is not None and row[0] == "derived":
+            return "derived"
+        conn.execute(
+            text(f"DELETE FROM {m_table} WHERE table_name=:t AND field_key=:k"),
+            {"t": t_ident["name"], "k": field_key},
+        )
+    return None
 
 
 def _replace_mapping_in_user_db(table: Dict[str, Any], rows: Dict[str, Dict[str, Any]], device_id: Optional[str] = None, *, field_type_map: Optional[Dict[str, str]] = None) -> None:

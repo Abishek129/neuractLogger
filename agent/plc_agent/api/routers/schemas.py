@@ -6,20 +6,43 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..permissions import require_logger_write
 
 from ..store import Store
+from .. import appdb
 
 import re
 
 
 router = APIRouter()
 
-VALID_FIELD_TYPES = {
-    "float32", "float", "uint16", "uint16_enum", "int16",
-    "uint32", "int32", "float64", "uint64", "int64", "bool16",
-}
+# Field types and units are DB-managed lists (app_field_type / app_field_unit,
+# edited in the DB). Each type word maps to the register decoding the Rust
+# engine understands; words are matched case-insensitively.
 
 # DP6(b): derived (formula) fields must be floating point — the engine
 # evaluates them as f64; default is float64.
-DERIVED_FIELD_TYPES = {"float64", "float32"}
+DERIVED_ENCODINGS = {"float64", "float32"}
+
+
+def _field_types() -> Dict[str, Dict[str, Any]]:
+    return {r["id"].lower(): r for r in appdb.load_field_types()}
+
+
+def _resolve_type(word: Any, *, derived: bool = False, types: Dict[str, Dict[str, Any]] | None = None) -> str:
+    """Validate a field type word against the DB list; returns the canonical id."""
+    types = types if types is not None else _field_types()
+    w = (str(word) if word is not None else "").strip().lower()
+    t = types.get(w)
+    if not t:
+        raise ValueError(f"FIELD_TYPE_INVALID:{w}")
+    if derived and t["encoding"] not in DERIVED_ENCODINGS:  # DP6(b)
+        raise ValueError(f"FIELD_TYPE_INVALID:{w}")
+    return t["id"]
+
+
+def _check_unit(unit: Any) -> None:
+    if unit is None or unit == "":
+        return
+    if not isinstance(unit, str) or unit not in {u["id"] for u in appdb.load_field_units()}:
+        raise ValueError(f"UNIT_INVALID:{unit}")
 
 # DP3: exactly the meval 0.2 builtin functions (vendored crate src/expr.rs,
 # Context::new). NOTE: meval has NO pow/log/log2 — the old whitelist let those
@@ -227,7 +250,7 @@ def _validate_and_order_derived_fields(fields: List[Dict[str, Any]]) -> None:
         # the meval ctx, so the formula would be NULL on every row.
         non_numeric = sorted(
             v for v in (formula_vars & regular_keys)
-            if field_types.get(v) and field_types[v] not in VALID_FIELD_TYPES
+            if field_types.get(v) and str(field_types[v]).lower() not in _field_types()
         )
         if non_numeric:
             raise ValueError(f"FORMULA_NON_NUMERIC_FIELD:{key}:{','.join(non_numeric)}")
@@ -286,18 +309,15 @@ def _normalize_and_validate_fields(fields: List[Dict[str, Any]]) -> None:
             raise ValueError(f"FIELD_KEY_DUPLICATE:{k}")
         seen.add(k)
         f["key"] = k
-        # Derived fields default to float64; regular fields validated against VALID_FIELD_TYPES
+        # Derived fields default to float64; regular fields to float32. Both are
+        # validated against the DB-managed type list; units against the unit list.
+        types = _field_types()
         if f.get("formula"):
-            ftype = (f.get("type") or "float64").lower()
-            if ftype not in DERIVED_FIELD_TYPES:  # DP6(b)
-                raise ValueError(f"FIELD_TYPE_INVALID:{ftype}")
-            f["type"] = ftype
+            f["type"] = _resolve_type(f.get("type") or "float64", derived=True, types=types)
         else:
-            ftype = (f.get("type") or "float32").lower()
-            if ftype not in VALID_FIELD_TYPES:
-                raise ValueError(f"FIELD_TYPE_INVALID:{ftype}")
-            f["type"] = ftype
+            f["type"] = _resolve_type(f.get("type") or "float32", types=types)
             f["eval_order"] = None
+        _check_unit(f.get("unit"))
 
 
 @router.post("/schemas", dependencies=[Depends(require_logger_write)])
@@ -311,9 +331,13 @@ def create_schema(payload: Dict[str, Any]) -> Dict[str, Any]:
         _normalize_and_validate_fields(fields)
         # Validate derived field formulas and compute eval_order
         _validate_and_order_derived_fields(fields)
+        description = payload.get("description")
+        if description is not None and not isinstance(description, str):
+            raise ValueError("DESCRIPTION_INVALID")
         schema = Store.instance().create_schema({
             "id": payload.get("id"),
             "name": name,
+            "description": (description or "").strip() or None,
             "fields": fields,
         })
         return {"success": True, "message": "schema_created", "item": schema}
@@ -338,13 +362,10 @@ def add_schema_field(schema_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             raise HTTPException(status_code=409, detail=f"FIELD_KEY_EXISTS:{key}")
         formula = (payload.get("formula") or "").strip() or None
         if formula:
-            ftype = (payload.get("type") or "float64").lower()
-            if ftype not in DERIVED_FIELD_TYPES:  # DP6(b)
-                raise ValueError(f"FIELD_TYPE_INVALID:{ftype}")
+            ftype = _resolve_type(payload.get("type") or "float64", derived=True)
         else:
-            ftype = (payload.get("type") or "float32").lower()
-            if ftype not in VALID_FIELD_TYPES:
-                raise ValueError(f"FIELD_TYPE_INVALID:{ftype}")
+            ftype = _resolve_type(payload.get("type") or "float32")
+        _check_unit(payload.get("unit"))
         field: Dict[str, Any] = {
             "key": key,
             "type": ftype,
@@ -395,13 +416,11 @@ def update_schema_field(schema_id: str, field_key: str, payload: Dict[str, Any])
             formula = field.get("formula")
 
         if formula:
-            ftype = (payload.get("type") or field.get("type") or "float64").lower()
-            if ftype not in DERIVED_FIELD_TYPES:  # DP6(b)
-                raise ValueError(f"FIELD_TYPE_INVALID:{ftype}")
+            ftype = _resolve_type(payload.get("type") or field.get("type") or "float64", derived=True)
         else:
-            ftype = (payload.get("type") or field.get("type") or "float32").lower()
-            if "type" in payload and ftype not in VALID_FIELD_TYPES:
-                raise ValueError(f"FIELD_TYPE_INVALID:{ftype}")
+            ftype = _resolve_type(payload.get("type") or field.get("type") or "float32")
+        if "unit" in payload:
+            _check_unit(payload.get("unit"))
 
         merged = {
             "key": field_key,
@@ -514,3 +533,47 @@ def import_schemas(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"imported": count}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ---------- Field types / units (read-only; edited in the DB) ----------
+@router.get("/schemas/field_types")
+def list_field_types() -> Dict[str, Any]:
+    """Allowed field `type` words, each with the register decoding it maps to."""
+    return {"items": [{"id": r["id"], "label": r["label"], "encoding": r["encoding"]} for r in appdb.load_field_types()]}
+
+
+@router.get("/schemas/units")
+def list_units() -> Dict[str, Any]:
+    return {"items": [{"id": r["id"], "label": r["label"] or r["id"]} for r in appdb.load_field_units()]}
+
+
+# ---------- One schema (registered after the static /schemas/* routes) ----------
+@router.get("/schemas/{schema_id}")
+def get_schema(schema_id: str) -> Dict[str, Any]:
+    schema = Store.instance().get_schema(schema_id)
+    if not schema:
+        raise HTTPException(status_code=404, detail="SCHEMA_NOT_FOUND")
+    return {"item": schema}
+
+
+@router.patch("/schemas/{schema_id}", dependencies=[Depends(require_logger_write)])
+def update_schema(schema_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Rename a schema and/or change its description. Fields are edited via
+    /schemas/{id}/fields. A duplicate name (ignoring case) is 409 SCHEMA_EXISTS."""
+    schema = Store.instance().get_schema(schema_id)
+    if not schema:
+        raise HTTPException(status_code=404, detail="SCHEMA_NOT_FOUND")
+    name = schema["name"]
+    description = schema.get("description")
+    if "name" in payload:
+        name = (payload.get("name") or "").strip() if isinstance(payload.get("name"), str) else ""
+        if not name:
+            raise HTTPException(status_code=400, detail="NAME_REQUIRED")
+        if Store.instance().schema_name_taken(name, exclude_id=schema_id):
+            raise HTTPException(status_code=409, detail=f"SCHEMA_EXISTS: {name}")
+    if "description" in payload:
+        d = payload.get("description")
+        if d is not None and not isinstance(d, str):
+            raise HTTPException(status_code=400, detail="DESCRIPTION_INVALID")
+        description = (d or "").strip() or None
+    return {"success": True, "item": Store.instance().update_schema_meta(schema_id, name, description)}

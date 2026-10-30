@@ -42,7 +42,7 @@ import pytest
 # ---------------------------------------------------------------------------
 # Paths / constants
 # ---------------------------------------------------------------------------
-REPO_ROOT = Path("/home/rohith/backend_LOS/LoggerFast")
+REPO_ROOT = Path(__file__).resolve().parents[2]  # was hardcoded to one machine's checkout
 AGENT_DIR = REPO_ROOT / "agent"
 TESTS_DIR = AGENT_DIR / "tests"
 RUST_BINARY = TESTS_DIR / "bin" / "neuract-job-runner"
@@ -64,6 +64,9 @@ TARGET_URL = f"postgresql://postgres@localhost/{TARGET_DB}"
 os.environ["APP_DB_URL"] = META_URL
 os.environ["LOGGER_DISABLE_BOOT_JOBS"] = "1"
 os.environ["LOGGER_ENABLE_AI"] = "0"
+# app.py loads agent/.env (load_dotenv never overrides set vars): keep auth ON
+# under test even if a local demo .env disables it.
+os.environ["LOGGER_AUTH_DISABLED"] = "0"
 os.environ["KC_URL"] = "http://127.0.0.1:1"
 os.environ["KC_ADMIN_CLIENT_SECRET"] = ""
 os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"
@@ -155,6 +158,20 @@ _TRUNCATE_TABLES = [
     "app_db_targets",
     "app_meta",
     "app_notifications",
+    # Equipment data. app_equipment_category is seed data (like
+    # app_protocol_types) and is deliberately NOT truncated; the built-in
+    # types are re-seeded per test (clean_state) after truncation.
+    "app_bus_meter",
+    "app_alert_event",
+    "app_alert_state",
+    "app_table_alert",
+    "app_schema_alert",
+    "app_bus_equipment",
+    "app_bus_type",
+    "app_bus",
+    "app_equipment",
+    "app_equipment_type",
+    "app_equipment_zone",
 ]
 
 
@@ -261,7 +278,10 @@ def clean_state(client):
     from plc_agent.api.store import Store
 
     _AUTH["mode"] = "admin"
+    from plc_agent.api import appdb
+
     _truncate_meta_tables()
+    appdb.seed_equipment_types()
     _drop_target_neuract_schema()
     Store.instance().load_from_app_db()
     yield
@@ -375,6 +395,14 @@ class ApiHelper:
             json={"name": name, "type": jtype, "tables": tables, "intervalMs": interval_ms},
         )
         assert r.status_code == 200, f"POST /jobs2 -> {r.status_code}: {r.text}"
+        return r.json()["item"]
+
+    def create_equipment(self, name: str, type_id: str, kind: str = None, category: str = "ems", **extra) -> dict:
+        """An element of a seeded type; kind defaults to distribution for panels, else single."""
+        kind = kind or ("distribution" if type_id in ("ht_panel", "lt_panel") else "single")
+        body = {"name": name, "categoryId": category, "kind": kind, "typeId": type_id, **extra}
+        r = self.c.post("/equipment", json=body)
+        assert r.status_code == 200, f"POST /equipment -> {r.status_code}: {r.text}"
         return r.json()["item"]
 
 
