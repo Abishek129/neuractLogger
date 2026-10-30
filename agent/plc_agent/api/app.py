@@ -97,6 +97,12 @@ def _cors_config() -> tuple[list[str], Optional[str]]:
         "http://100.90.185.31:5180",
         "http://100.90.185.31:8081",
         "http://100.90.185.31:9847",
+        # Naidupet: Logger V2 production (9848) and dev (3170), from plant
+        # PCs (LAN) and over Tailscale. localhost / 127.0.0.1 match the regex.
+        "http://10.60.200.10:9848",
+        "http://100.65.86.37:9848",
+        "http://10.60.200.10:3170",
+        "http://100.65.86.37:3170",
     ]
     allow_origin_regex = r"^(https?://tauri\.localhost(:\d+)?|(app|tauri)://.*|https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|100\.90\.185\.31)(:\d+)?)$"
     return allow_origins, allow_origin_regex
